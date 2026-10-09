@@ -1,0 +1,31 @@
+# Build outputs (root only: src/ has game folders named build/)
+/build/
+/out/
+/thirdparty/
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.ilk
+*.exp
+*.pch
+*.rgbx
+CMakeUserPresets.json
+compile_commands.json
+__pycache__/
+*.pyc
+
+# The game itself: never commit
+*.xex
+*.iso
+*.pdb
+*.pe
+mods/*/files/
+
+# Runtime state written next to the exe / by the user
+*.sav
+saves/
+cache/
+ds2.toml
+*.log

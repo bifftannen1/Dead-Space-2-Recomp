@@ -1,0 +1,20 @@
+# Intro skip: the boot intro is one movie, movies/en/trio_frontend.vp6 (EA logo, Visceral
+# logo, the title logo forming; the name the game passes, logged by this mod). The matched
+# movie's own player is told it has finished once it has played end_after_ms; no other movie
+# player is touched. Ending it earlier than the game needs (it still boots while the logos play)
+# breaks the title screen, so the skip is partial: about 8 of 13 s are played.
+[mod]
+name = "intro_skip"
+version = "1.1.0"
+description = "Skip the boot/intro movie"
+enabled = false
+load_order = 20
+sources = ["intro_skip/intro_skip.cpp"]
+hooks = ["EARS::RtMovie::RtMoviePlayer::Play",
+         "rw::movie::MoviePlayer2::IsFinished",
+         "EARS::RtMovie::RtMoviePlayer::Stop"]
+
+[settings]
+match = "trio_frontend"   # comma-separated substrings of the movie file name; "" = log only
+end_after_ms = 8000       # measured: <= 5000 leaves the title screen stuck (prompt gone, Start ignored);
+                          # 6500 and 8000 give a correct title + menu (docs/evidence/modapi-2026-10-07)

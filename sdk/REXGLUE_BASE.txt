@@ -1,0 +1,13 @@
+upstream_repo = https://github.com/rexglue/rexglue-sdk.git
+upstream_commit = c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
+upstream_tag = v0.10.0 (commit message "Release v0.10.0", 2026-08-21)
+patch_sha256 = f70cce3f3911b81ea555e1af37491de11d3370b1ba0fc6a54509458dbc74cb92
+ds2_switch_port_import_commit = ce73243c0e29d3762291ee53c8824c5743b9e28c
+
+# ce73243c is the local "ARCHIVE IMPORT - NOT UPSTREAM HEAD" commit in ds2_switch_port
+# (docs/audit/sol-rexglue-full-map-2026-10-04/generic-sdk-import-layout-v4/sdk). Its message
+# names its source revision c94f5ebd. `git diff --stat c94f5ebd ce73243c` shows 22 files changed,
+# all of them submodule gitlinks (the import holds the submodules as nested folders), and no
+# file content changes. The 17 nested dependency imports match the upstream gitlinks 17/17.
+# Upstream has 5 more submodules (catch2, inja, moltenvk, tracy, vulkan-loader) that the local
+# import did not carry. tools/build.py fetches all of them.

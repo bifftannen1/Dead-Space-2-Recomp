@@ -1,0 +1,149 @@
+# R1-18 provenance (ReXGlue SDK patch under A/B + provenance; audit: docs/audit/r1-18-vpkuwus-fix-2026-10-05/)
+pre  vector.cpp b3528ed4a7e0642e2f390cf3d745e18d6e496f14d1707afef6f7049bb84fb39d  pre/vector.cpp
+post vector.cpp 8ffbba385eea413ccf86123c3e7079c6a631ecb9f4244b0867169b2d6effba51  sdk/src/codegen/builders/vector.cpp
+patch            4991e781d25c72c738c34f15de561a2b234b90f0a24825b1212087667f1fa3ba  vector_cpp_alias_fix.patch
+old rexglue.exe  3914821e782c43a048214117de4fe82e82e5a48c43537e8b967a3a2dfda2ebcc  sol-rexglue-same-image-2026-10-04/build-overlay-v2/bin
+new rexglue.exe  c7ab3295965cada362df792fff9dabd51afe11e188d020f82b1f1ecca355040a  build-overlay-v3/bin (tools/r1_18_build_codegen_overlay_v3.py)
+new rexcodegen.lib e1755eb1871cf95b65379d562cac14af2090fe491b67d334cc10fb3e79f9bfad
+runtime not rebuilt: rexruntime.dll pin 1c44eee4... checked by tools/r1_4_launch_v13.py
+# R1-28 GPU trace hook (user-approved 2026-10-05; audit docs/audit/r1-28-gpu-trace-2026-10-05/)
+pre  command_processor.cpp 53a982be7550aee8aa3194eb0741d69b55af41ab2db65e611cdacec42a67a125  r1-28/pre/command_processor.cpp
+post command_processor.cpp 4a60173821ba1ed08399685c4baceadfe430b85fce6cb62affa4958326fbe0e2  sdk/src/graphics/command_processor.cpp
+patch                      61927a8cdb7846edd820d42bd0e2839168013d4e64f79458f6646612e0f29d08  r1-28/gpu_trace_hook.patch
+old rexgpu-xenos.dll 2b2dad10db310bdbd2c0c91185c9dd4213b8125966c8b9b703567a333256db89  sdk/out/win-amd64 (untouched)
+rebuilt unpatched    c9a22e3e7f836ca72569fa8fd6805c634f20f861cf56bd4d9785d19710f60051  build-unpatched-v1 (PE sections == pinned; only header timestamp differs)
+new rexgpu-xenos.dll 087934bc9ed6d8f5ba105d9befb8a1178b0a37b1ff43e9365bf6162522896f99  build-trace-v1 (tools/r1_28_build_gpu_plugin_v1.py)
+rexruntime.dll not rebuilt: pin 1c44eee4... (unchanged)
+# C4 resolve barrier fix (user-approved 2026-10-06 under R1-18; audit docs/audit/c4-resolve-barrier-2026-10-06/)
+pre  vulkan/shared_memory.cpp c14c6b491904119218562e7d70b74b153282ccc6e8caddaeb10fc595bebc96f0  c4/pre/shared_memory.cpp
+post vulkan/shared_memory.cpp fb2ae291ac89ab15ed65b2582bd66f771e7dad80f5b0f787b782755b6bfd3085  sdk/src/graphics/vulkan/shared_memory.cpp
+patch                         2cc9d67f8d342188fbed6b23c8b7dbcb21d8dee3554fbb22d4fe336f5e19a4b9  c4/shared_memory_compute_write_fix.patch
+also compiled: command_processor.cpp b597d78c... (R1-30 hook v2, unchanged by C4)
+new rexgpu-xenos.dll 7a43c0034f02db49fa8b8a247f80d78c2b0f1c4fe979d4ea438b69b5443386a7  c4/build-fix-v1 (tools/r1_28_build_gpu_plugin_v1.py)
+pinned rexgpu-xenos.dll 2b2dad10... and rexruntime.dll 1c44eee4... untouched
+# N1 NX cross-build (autonomous, user permission 2026-10-06 under R1-18; audit docs/audit/n1-nx-crossbuild-2026-10-06/; all edits additive behind REX_PLATFORM_NX / __NX__)
+pre  include/rex/chrono/chrono.h 619856510c02c07dda1e476e51acc2f152131425ca33de4960c49af11d51bd31  n1/pre/include/rex/chrono/chrono.h
+post include/rex/chrono/chrono.h 0886553f21925ae35bceb375a0565c94e0ff54bfb961fca39e8a9783117ab280  sdk/include/rex/chrono/chrono.h
+pre  include/rex/platform.h c540993525ba004aa943e3075edad40bd5c530e959177e8ad56093608ce55043  n1/pre/include/rex/platform.h
+post include/rex/platform.h 02c7d084d8c6dc52ab37d693f2aa491bd956aabb8666447adf35e0efbdb4a065  sdk/include/rex/platform.h
+pre  include/rex/platform/dynlib.h 0d42aadc2130c3b2dba5eb24582c1051b569d8b7e21c16598863edfdcfc6aa63  n1/pre/include/rex/platform/dynlib.h
+post include/rex/platform/dynlib.h 3cc79119e6d931d4828b9942ba44c63dd2dfe6cdfec8a28d44eaa1e98b185685  sdk/include/rex/platform/dynlib.h
+pre  include/rex/string/numeric.h d9b18d372928c67524e136f53636c561431a887b4b9ca021bfdb357b8461780b  n1/pre/include/rex/string/numeric.h
+post include/rex/string/numeric.h 2944041fecb743b8c7a68d2c7a59c67ab7e1066686fe61b2e934388f063e53df  sdk/include/rex/string/numeric.h
+pre  include/rex/ui/vulkan/api.h 4c2429ccb734ba062e47b102daa916197f89df87d00ad96aaaaa9749b37e4eda  n1/pre/include/rex/ui/vulkan/api.h
+post include/rex/ui/vulkan/api.h fe34bf2deb8ae19d6b3d7d897183ae43b665670f75ed27bff5662a2137c95404  sdk/include/rex/ui/vulkan/api.h
+pre  src/graphics/command_processor.cpp b597d78c302aac1f078b19cb18186947aec84acc3934f319410cbb5c933aaf74  n1/pre/src/graphics/command_processor.cpp
+post src/graphics/command_processor.cpp 02a77d96d5e2c7a9fb7c0c8e276550aa6c3d0160f475a2c42996d831e6749e63  sdk/src/graphics/command_processor.cpp
+pre  src/kernel/xam/xam_net.cpp 7e09338105a1fdf5061c8503601c6f59129baa8ce2069faf53ebad69c41b2f88  n1/pre/src/kernel/xam/xam_net.cpp
+post src/kernel/xam/xam_net.cpp eda6f21c822bca643b41310b3d9e12d9ca1836df3d761137583114a3c2238dd0  sdk/src/kernel/xam/xam_net.cpp
+pre  thirdparty/renderdoc/renderdoc_app.h d66cdaf5fb0893678382746cf5d3f47073884153a8d0c6957b2d245994f0315b  n1/pre/thirdparty/renderdoc/renderdoc_app.h
+post thirdparty/renderdoc/renderdoc_app.h f14ba36229f72e28d04ceecba96d65e6a48511b48cab7086523636bed650e4d5  sdk/thirdparty/renderdoc/renderdoc_app.h
+patch 81c4f18120ea6fd1f112c9abb921276c31820f84cc39d2cc4d0c47bdeda96274  n1/sdk_nx.patch (8 files)
+Windows A/B NOT run: every edited line is inside a non-Windows branch or wraps Win32 code in #if REX_PLATFORM_WIN32 (true on Windows); pinned rexruntime.dll/rexgpu-xenos.dll not rebuilt
+# N2 (2026-10-06) Horizon platform layer: REX_PLATFORM_NX SDK edits (R1-18 protocol). Edit tool tools/n2_sdk_edit.py (edits/e1..e7.json; e5 folded into e1); pre-images docs/audit/n2-horizon-2026-10-06/pre/; second run of all edit sets: 37 'already applied', 0 edited.
+pre  include/rex/memory/mapped_memory.h d3034de4d3e38ef7fec913d36464754ba4330af167bceba63cfd6bbe65718ce5  n2/pre/include/rex/memory/mapped_memory.h
+post include/rex/memory/mapped_memory.h 43d1e3ce619f47b6f61c59334313fec6ef07910b01a8237ec5be54ef0aa80d09  sdk/include/rex/memory/mapped_memory.h
+pre  include/rex/thread/fiber.h fd86c8e2bae0a628b0d3a43ea503c3cdc2d419d6d6773fd4dce9802d614334a8  n2/pre/include/rex/thread/fiber.h
+post include/rex/thread/fiber.h 88fa975242a540a7e124030a0b81eb8a7732691d223992eb518df29a8405fd18  sdk/include/rex/thread/fiber.h
+pre  include/rex/ui/surface.h 7ab91b78edc036fffac5d123168eb62ee6b88bc218cc884aa054bb18ce850730  n2/pre/include/rex/ui/surface.h
+post include/rex/ui/surface.h a828f61f68d33a00fc64e710cba44f5d1a8732494842bd73923b835f58172eb5  sdk/include/rex/ui/surface.h
+pre  include/rex/ui/vulkan/instance.h d604e53129817ffc452c1902bf1ffb87eb1074b6d3cf494fa21110f95cc48cf5  n2/pre/include/rex/ui/vulkan/instance.h
+post include/rex/ui/vulkan/instance.h 95822ba59666c0a4a78ef17f62b7aaf3a159719bd9be8a4d89fcfcafeff81ba2  sdk/include/rex/ui/vulkan/instance.h
+pre  src/core/atomic_posix.cpp 10b0f6610a524cfce0e4ad0caa0a077b4532c02e407d12adb0c61aeb9d666a95  n2/pre/src/core/atomic_posix.cpp
+post src/core/atomic_posix.cpp 4d50febdb0bd11271ebc8a83ec95f4b6837523ae0da17cf78f31ec927ed98a96  sdk/src/core/atomic_posix.cpp
+pre  src/core/clock_posix.cpp 7b75bb6bf1888a558eb1de8ffc0f6346e4e1bbff544e8d953a81cab31f94e593  n2/pre/src/core/clock_posix.cpp
+post src/core/clock_posix.cpp 6ad67704b2aec38439a3f1d96ff6c1ae27f3ff5c156acbb17c41631de864092f  sdk/src/core/clock_posix.cpp
+pre  src/core/platform/console_posix.cpp 22c25cead00e407c1b2a529e5a0d71b57b833c74314087ec9bafea9c08551a34  n2/pre/src/core/platform/console_posix.cpp
+post src/core/platform/console_posix.cpp 13d78a4fd4d2e80267b94099ffc651fe5d2839f54002601031db3ba4b54d8507  sdk/src/core/platform/console_posix.cpp
+pre  src/core/platform/env_posix.cpp 19c8555d63a9eac3095f2b250087e6f7428c9cc914df38da316d25f649158207  n2/pre/src/core/platform/env_posix.cpp
+post src/core/platform/env_posix.cpp 51dcff65e1d319c63d8b5deb60092e22fcba958b4e958c27967434981c4ad0e8  sdk/src/core/platform/env_posix.cpp
+pre  src/core/socket_posix.cpp c43d79f7abbc08addeb5ba5af52d673384247c837b44a6e918797c1c75bc2fad  n2/pre/src/core/socket_posix.cpp
+post src/core/socket_posix.cpp 58478d4f00f0adaa4a8d24b050c1352f054d75a4e3a69142dbdf5eb0acd95866  sdk/src/core/socket_posix.cpp
+pre  src/core/threading_posix.cpp f60dfd4dc854f61c989bb68ba9dbc3c4cc6d3f58a6f2f00a19b2019538447fa9  n2/pre/src/core/threading_posix.cpp
+post src/core/threading_posix.cpp 9552631d3bd6e79deb1ed2a8892b04731624095f8b6f30a852e220c5d06ea81c  sdk/src/core/threading_posix.cpp
+pre  src/filesystem/devices/disc_image_device.cpp b7fc96d160d8af1a14b9e4c3e0dc8b497a1d3f2c5caa919ba6d71acfc814031d  n2/pre/src/filesystem/devices/disc_image_device.cpp
+post src/filesystem/devices/disc_image_device.cpp c2307fdd84cd7558c021bec1d38fa2a60e9b76d824359c2ffce07aa3d7bca27c  sdk/src/filesystem/devices/disc_image_device.cpp
+pre  src/filesystem/devices/disc_image_entry.cpp af3cd2077d281a57d3d832f52e28da23d59c831da49a0e9e972bd35b28270eaf  n2/pre/src/filesystem/devices/disc_image_entry.cpp
+post src/filesystem/devices/disc_image_entry.cpp a610e6d1ecba61e0bc3cf0eec570d2318529236a549db753c153d94d1dda6c6d  sdk/src/filesystem/devices/disc_image_entry.cpp
+pre  src/filesystem/devices/disc_image_file.cpp b6cc192dfb084c1f98a74a2697c2d3a4adc382db5a821a392aa4e475cb5b5f74  n2/pre/src/filesystem/devices/disc_image_file.cpp
+post src/filesystem/devices/disc_image_file.cpp 70de596fa599595f39ac502a34281d0e99d7e57699b8ab14c991fe1d2774c9e5  sdk/src/filesystem/devices/disc_image_file.cpp
+pre  src/input/input_system.cpp a2101f593abff808585a78de1aa1c25e41521fd4ed9be45f2102a6c968d033dc  n2/pre/src/input/input_system.cpp
+post src/input/input_system.cpp 27650eef38117559dde9d79d61e838c6e8289c7f3492af8f9214087861ebe1af  sdk/src/input/input_system.cpp
+pre  src/system/xmemory.cpp a0d460a6ce4f645fd23c9664bfba61fc11fb7853cdb93d065e979a3f6d65df08  n2/pre/src/system/xmemory.cpp
+post src/system/xmemory.cpp a4138cb3d61c8df96e849115f0c0765693fb5ff0b4f40fd773df2d14fd0b7aac  sdk/src/system/xmemory.cpp
+pre  src/system/xthread.cpp 065605de5137129ce2c0f9ff4ede028219e35d5ec1f3f2e2d38226ef94d6ac61  n2/pre/src/system/xthread.cpp
+post src/system/xthread.cpp 5de3df85c83fa82fa4201112a28e666bb585b81573149660cb74585a7b4683ae  sdk/src/system/xthread.cpp
+pre  src/ui/vulkan/vulkan_instance.cpp 93113c1050e75b318230509415cb6169435eab944f569612e91cf47b24b0ed43  n2/pre/src/ui/vulkan/vulkan_instance.cpp
+post src/ui/vulkan/vulkan_instance.cpp 5a92c6d450743e211cf841200ee8afe6499e9d17c9d368bc8a6ed666b0ecbc6f  sdk/src/ui/vulkan/vulkan_instance.cpp
+pre  src/ui/vulkan/vulkan_presenter.cpp a850f9764f62bc92ae5c5fdfa417e8879749074149953ff159631cbc4f95bb97  n2/pre/src/ui/vulkan/vulkan_presenter.cpp
+post src/ui/vulkan/vulkan_presenter.cpp 1fe3675af93c342212c20f7fc0fbff2aa432e9a17eaac5cdfcddb7ed16b003c8  sdk/src/ui/vulkan/vulkan_presenter.cpp
+patch 1ee9b332201dc236f0d05fb2829ae8f7b2a340f35c276c493a1b474b76daca8e  n2/sdk_nx.patch (18 files)
+new  include/rex/audio/nx/nx_null_audio_system_nx.h 6abee422c87d8819fa75425eb7a9e7cb68719d0917e2a35c1ca85f8877466bae  sdk/include/rex/audio/nx/nx_null_audio_system_nx.h
+new  include/rex/ui/surface_nx.h 8b5d6debb38026c7f9e45227b439cf426053a2ea1154c5477c23d6deea282602  sdk/include/rex/ui/surface_nx.h
+new  include/rex/ui/windowed_app_context_nx.h abf2239cb7dfcfeb0658c9843cd9e7db083d530fac13e98beda7abc891f808ee  sdk/include/rex/ui/windowed_app_context_nx.h
+new  src/audio/nx/nx_null_audio_system_nx.cpp dd78a8d026b44a7b276f848e1a0c724f00c800c4eaf293e02f601b2005a18d31  sdk/src/audio/nx/nx_null_audio_system_nx.cpp
+new  src/core/exception_handler_nx.cpp 8823cddb3ad47d1dda00de36dc718a89ffbf9adc1632e42122408562e2c76e3c  sdk/src/core/exception_handler_nx.cpp
+new  src/core/fiber_nx.cpp 4da35cab4e030483ce4dcb1d33c3b07a06dde1079d13e6414b76268386eb94fc  sdk/src/core/fiber_nx.cpp
+new  src/core/fs_impl_nx.cpp 972bf520489c6a6f4878bc3773ea36c8c0cf689c08ebd5d99e84d551881a1804  sdk/src/core/fs_impl_nx.cpp
+new  src/core/mapped_memory_nx.cpp 42468e5b31f749f50fc851b5770908ba6ca100c075d06dfdb34c8f9be1e4a1eb  sdk/src/core/mapped_memory_nx.cpp
+new  src/core/memory_nx.cpp 86e74a3d5456c5f5c114f10124910971f2b1aefae34fed23b6d81f1cf93552c0  sdk/src/core/memory_nx.cpp
+new  src/ui/window_nx.cpp b31806159739e1ca6f7ffec0a24076c5c66850bd55ee6d908296fb28f17da05b  sdk/src/ui/window_nx.cpp
+Windows A/B: tools/n2_windows_ab.py -> N2_WINDOWS_AB_PASS (shake detected; 12/12 Windows-compiled files token-identical or identical except integer literals = __LINE__ shift; 6 *_posix.cpp not compiled on Windows); docs/audit/n2-horizon-2026-10-06/windows_ab.json. Pinned rexruntime.dll/rexgpu-xenos.dll not rebuilt.
+Upstream note: these edits + the *_nx sources are the upstreamable REX_PLATFORM_NX layer (docs/audit/n2-horizon-2026-10-06/NOTES.md).
+# N3 (2026-10-06) Eden first light: f3 command_processor NX swap counter + trace re-arm + N3_INVALIDATE_EACH_SWAP; f4 clock_posix NX system tick. Paths n1/ = docs/audit/n3-eden-firstlight-2026-10-06/. Windows A/B: tools/n3_windows_ab.py N2_WINDOWS_AB_PASS
+pre  src/core/clock_posix.cpp 6ad67704b2aec38439a3f1d96ff6c1ae27f3ff5c156acbb17c41631de864092f  n1/pre/src/core/clock_posix.cpp
+post src/core/clock_posix.cpp 4ddd785b1099c0eb347269d0372dca5fd271e153a794ef89d11892c83f2a5a76  sdk/src/core/clock_posix.cpp
+pre  src/graphics/command_processor.cpp 02a77d96d5e2c7a9fb7c0c8e276550aa6c3d0160f475a2c42996d831e6749e63  n1/pre/src/graphics/command_processor.cpp
+post src/graphics/command_processor.cpp 98561e80ed4cb4dc3216a1833033caf51ce7db5a97aee76d08b10215aea591f9  sdk/src/graphics/command_processor.cpp
+patch 80874ffc66a7a32e43e3543b84ec6cb25d2e86f5b632598580878357f56ba995  n1/sdk_nx.patch (2 files)
+# N3b (2026-10-06) Eden pipeline census hooks, NX-only (#if REX_PLATFORM_NX, #else = original); audit docs/audit/n3b-eden-pipelines-2026-10-06/NOTES.md; Windows A/B N2_WINDOWS_AB_PASS (4/4 identical except __LINE__, shake detected)
+pre  include/rex/ui/vulkan/util.h eca70b08f7ab97958906e8adb287519b27aa443a7e00cb40f43b47121f731bff
+post include/rex/ui/vulkan/util.h bca3107b7e87fa698798acf09ab286b8ce45746049b8d02c0ec2049e2057d15a
+pre  src/graphics/vulkan/pipeline_cache.cpp a3dbb1a52cf6a0d6b4ce9dfb278e94e5c9fa3b93e753ad78e8a7bb2a9b6e9ca2
+post src/graphics/vulkan/pipeline_cache.cpp b7861fc64b99193f24b2b928807c0c9525d403c7873e69f0af42868561074c1c
+pre  src/graphics/vulkan/shader.cpp d4e4f6b25137beb8cc229e732c7cdbacf6b0d024bb92ce3ada245cdd5f30ffeb
+post src/graphics/vulkan/shader.cpp 8abdfd689df94a4bcfcaf18641faef440d3d18837318663d2b478e9d8102f940
+patch f52ed43b83badad7133a8e8975dfdb99969fa24445212490a227fdbe4730756a  n3b/sdk_nx.patch (3 files)
+app  nx_main.cpp 886c0cefdcd775445ea806d19059ee3b4c55bed5e1c39a73f0e275b241799a44 -> dca36578b99ff1293e14577516a525c48575414c5dd82df71ddff36ab1e7699f; n3b_hooks.inc 559a31ab154305fcf05aa04f706c54a728273736868db044e77f1ba0407340aa
+# P3 (2026-10-06) precompiled SPIR-V table loader + SHADER_HIT/MISS rows + P3_DRAW_CPU + translator argument sequencing (unsequenced-evaluation fix, NX 15/15 BYTE_EQ, PC 155/155 BYTE_EQ); audit docs/audit/p3-loader-2026-10-06/NOTES.md
+pre  src/graphics/vulkan/command_processor.cpp 4335110822d13947338efd7e773bd99266633d7083dfae9c9680034c0799dc77  p3-loader-2026-10-06/pre/command_processor.cpp
+post src/graphics/vulkan/command_processor.cpp 3c14764ab0241bf19cb49c3ace6dcdb297002d06d425c90fcf80c2c67856aec4
+pre  tools/p2_offline_shaders/p2_offline_translate.cpp 20342cd5aa2b71e6e5357ba6dd7e65d703d21ca4c19b7ed735fb5d02e4fff3ef  p3-loader-2026-10-06/pre/p2_offline_translate.cpp
+post tools/p2_offline_shaders/p2_offline_translate.cpp 27a5fc4477a1165f6d90f0b5f3f09ea636593c901a369f0082d16fe27399dd0b
+pre  src/graphics/vulkan/pipeline_cache.cpp 87e601ac40af2d64fac99dd088eb60ea4ed74029fe65a2675fd305fb1fb690ce  p3-loader-2026-10-06/pre/pipeline_cache.cpp
+post src/graphics/vulkan/pipeline_cache.cpp b81f8b5d0dba52db04d45cc16798fe072670160ed4e198cae9d80e37498f4983
+pre  src/graphics/pipeline/shader/spirv_builder.cpp 12a34b805048beee5162de9cdca7f6f4dc3e915eb2dc9ac5849db8ead122526a  p3-loader-2026-10-06/pre/spirv_builder.cpp
+post src/graphics/pipeline/shader/spirv_builder.cpp 7266b340f78d19fd6641539a0718ea322424dd38ee5a7381f2dd7facfb92edb8
+pre  src/graphics/pipeline/shader/spirv_translator.cpp 18688a93062f8deed3c8919240f323a9c03d1ad524601cda1a20f100af2d5a14  p3-loader-2026-10-06/pre/spirv_translator.cpp
+post src/graphics/pipeline/shader/spirv_translator.cpp 6b843e21e344ff52ca90df428c6abe54c5c97f77f6ea2fb88b2fff050cf49829
+pre  include/rex/graphics/pipeline/shader/spirv_translator.h 97d4f5c93ac2ac0a04a0bcff7254907fb12df5d83e29253c073b2ed8c258b552  p3-loader-2026-10-06/pre/spirv_translator.h
+post include/rex/graphics/pipeline/shader/spirv_translator.h 83403b9527f6e8fc2c52f82234875afdbc4f51b17c1c9950164612bfeec830ed
+pre  src/graphics/pipeline/shader/spirv_translator_alu.cpp dfe92d0b216c4d580ac7cbec8605b223d6af6c8ef38f87ec34f4db19c97a5f01  p3-loader-2026-10-06/pre/spirv_translator_alu.cpp
+post src/graphics/pipeline/shader/spirv_translator_alu.cpp a4440852b3ac86848803119d1d37f6a942542f52c2ace21413f4917694238e50
+pre  src/graphics/pipeline/shader/spirv_translator_fetch.cpp b4cba3533cb7f5bdf92206493b49ded9e4e781194a23d363ffabd06ebda77e39  p3-loader-2026-10-06/pre/spirv_translator_fetch.cpp
+post src/graphics/pipeline/shader/spirv_translator_fetch.cpp c75375e421b6bca093ea75159e5f12909041464968ce3db97316118b5d80ae79
+pre  src/graphics/pipeline/shader/spirv_translator_memexport.cpp 5932fc5990642f0de0856aef08de975e3d6bb8cee83fc530d8e8b4f18d8a1212  p3-loader-2026-10-06/pre/spirv_translator_memexport.cpp
+post src/graphics/pipeline/shader/spirv_translator_memexport.cpp d60d258cf1762c4473132ec60fc2ef75cdb7fa9d70ebe2ab11c2f4cfa4b8daa3
+pre  src/graphics/pipeline/shader/spirv_translator_rb.cpp a4aaf9e6b8ab5fdce92ab19e1aa228cd439375f302739bc61c89d481d5699a24  p3-loader-2026-10-06/pre/spirv_translator_rb.cpp
+post src/graphics/pipeline/shader/spirv_translator_rb.cpp f0750c323c5f95c511188ca1e77e92d15d67239ec872094f7984146e201c80fd
+pre  include/rex/graphics/pipeline/shader/translator.h 821c3955ad43cb5c73df9a2206549f196a0955c7ef0d3571233f08a83924a54b  p3-loader-2026-10-06/pre/translator.h
+post include/rex/graphics/pipeline/shader/translator.h 595a3f266d474cfed6f1119b022678d62e00445a3599976c0d82f014eef02386
+patch 0e1aa510d4e251931447dcf476d7823cf726f0aaf4546e91fcf35b14636f8d8b  p3-loader-2026-10-06/p3_sdk.patch (11 files)
+# P4 (2026-10-06) Eden large-VS tests: pipeline_cache.cpp cvars p4_wait_idle_after_pipeline / p4_pipeline_settle_ms / p4_vk_pipeline_cache_path (all off = previous behaviour); audit docs/audit/p4-eden-largevs-2026-10-06/NOTES.md; Windows A/B winab_p4 vs p3 ab_on: SPIR-V 93/93 byte-identical, 0 P4 rows, 27/27 captures non-blank
+pre  src/graphics/vulkan/pipeline_cache.cpp b81f8b5d0dba52db04d45cc16798fe072670160ed4e198cae9d80e37498f4983  p4-eden-largevs-2026-10-06/pre/pipeline_cache.cpp
+post src/graphics/vulkan/pipeline_cache.cpp 3a9ba8b44fa18bd76eda01e6cb692db5ce7bb0f471999368288e8b0ebe9fe70a
+patch 332c9608d8699dad4cbf2ceefdba0690eff625b43929aafa5f07f70d799a263b  p4-eden-largevs-2026-10-06/p4_sdk.patch (1 file)
+nxlib librexgpu-xenos.a p1b 429956c1bed1fff31644754c72a70e071022b6976499c9bb0028df49efe8d58d -> p3 67c289e1c0f7e603c6e43571de8fcecd6f37b045fe4172134be860889ba47893 -> p4 6cfb89a0df48c775ab02aa65952a6a7a11155d9d8c4f3d6610521904ea2876fe (tools/p4_nx_rebuild.py, 8 units, 35 members)
+
+# P6 (2026-10-06) NX audio (nn::audio AudioOut) + input (nn::hid Npad); audit docs/audit/p6-nx-audio-input-2026-10-06/NOTES.md; Windows A/B (tools/p6_windows_ab.py): shake detected, input_system.cpp token-identical on Windows (1/1)
+pre  src/input/input_system.cpp 27650eef38117559dde9d79d61e838c6e8289c7f3492af8f9214087861ebe1af  p6-nx-audio-input-2026-10-06/pre/src/input/input_system.cpp
+post src/input/input_system.cpp ef84bc0e858e259f87e5b7151a0432da0e3cc85eaf583c7810ae33f78983befc
+patch adeae06a43b3859e975f3f44e8bd3fe36e728dc9e3f43d8f3d51483bc2e934c0  p6-nx-audio-input-2026-10-06/sdk_nx.patch (1 file)
+new  src/audio/nx/nx_audio_system_nx.cpp fb7fc1fb4385c7f954957a0bf18955972bf7c5c8eaa56d659f027a51069298da
+new  include/rex/audio/nx/nx_audio_system_nx.h 4d44974e69ee3ef9bf066d129677ed36e3d2356097b6974ca2256a57a6320207
+new  src/input/nx/nx_hid_input_driver_nx.cpp eb879b1b0cb648b7b5900f30020149dcc2b26a1693fd4aba5dedae1a131c06ff
+new  include/rex/input/nx/nx_hid_input_driver_nx.h 8d02b6f8d82bed8f1012641a07480f8f840f7362acb8f40123002cee57e72111
+app  tools/n2_nx_app/nx_main.cpp pre f9bdae8964f7182c7da3540e2943857dc5f5f2535f922c0542c7210504fc9fc7 -> post b429ab6e61943d16e9139ef94e75142409c9995f0c857efc65cb3239da06a62f (tools/p6_app_edit.py)
+nxlib librexruntime.a 9153c857863ed5395db27b98e6a090671c27d2cfb94f442edaa3a569ffa0cfd4 -> 6f394db422745020bf58223a8e25d1f58f9b1e4c98610eeabefdb4be42b7993d (tools/p6_nx_rebuild.py, 1 unit, 186 members)
+nxlib librexplatform_nx.a (N2 dir, 18 units incl. 2 P6) f16fca11a622d1789ab7a1955a69bfba590ab89bcf21c5cedb1a708f850bf62e
+nsp  p6-nx-audio-input-2026-10-06/link/ds2nx.nsp 72d3611a89f56f5a2006c1ad0c45d89b0ecc5d58cd9f6065e416aa24d0504fb2

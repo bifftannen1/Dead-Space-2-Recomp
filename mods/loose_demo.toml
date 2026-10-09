@@ -1,0 +1,10 @@
+# Sample loose-file mod: game:\disc1_info.txt from mods/loose_demo/files (B2).
+# The files are made from your own disc: python tools/modapi/make_loose_demo.py <disc.iso>
+# then set enabled = true.
+[mod]
+name = "loose_demo"
+version = "1.0.0"
+description = "Loose-file override sample (disc1_info.txt + CRLF)"
+enabled = false
+load_order = 30
+files = "loose_demo/files"

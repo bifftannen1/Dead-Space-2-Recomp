@@ -1,0 +1,7 @@
+# Keep these byte-exact (no EOL conversion): the patch is sha256-pinned, the TSVs are tables.
+*.patch -text
+*.tsv -text
+*.toml -text
+*.json -text
+# Recompiled source: stored as-is so a checkout reproduces the verified tree byte for byte.
+src/** -text
