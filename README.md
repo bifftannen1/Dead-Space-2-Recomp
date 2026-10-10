@@ -1,7 +1,6 @@
 # Dead Space 2 Recomp
 
-> **Private repository.** `src/` is derived from the retail game (EA / Microsoft XDK code,
-> translated from `default.xex`). Do not make it public or redistribute it.
+> No game data is included. You need your own retail copy of Dead Space 2 to build and play.
 
 A static recompilation of the Xbox 360 version of Dead Space 2 that runs natively on PC.
 The whole game executable (47,419 functions) is translated to C++ by

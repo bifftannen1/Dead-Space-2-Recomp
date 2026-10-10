@@ -1,7 +1,7 @@
 # Regenerating src/
 
 This repo holds the pipeline's *output*. The pipeline (codegen manifest, TU partition seed,
-allocation and name tables, organizer, naming chain) lives in the private **DS2Recomp** repo.
+allocation and name tables, organizer, naming chain) lives in the separate **DS2Recomp** repo (not published).
 
 To refresh:
 1. Run the DS2Recomp build.
