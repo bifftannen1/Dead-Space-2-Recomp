@@ -13,7 +13,7 @@ which has:
 - `tools/build.py`: the end-to-end pipeline (SDK -> codegen -> organize -> app)
 
 To refresh this repo, run the DS2Recomp build. Then replace `src/` here with
-`app/generated_named/`, plus `ds2_rex_diagnostic_funcs.<N>.h` and `ds2_rex_diagnostic_pch.h`
+`app/generated_named/`, plus `ds2_rex_diagnostic_pch.h`
 from `app/generated/`. Keep `src/app/` and `src/modapi/`. Rebuild and run the object
 comparison in docs/BUILDING.md.
 
