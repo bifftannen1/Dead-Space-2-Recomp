@@ -1,0 +1,95 @@
+# Dead Space 2 (retail disc 1 XEX, prototype builds f/q/d with PDBs) -- the regression config.
+# Paths are this machine's; nothing here is game-derived data. Relative paths resolve from this file.
+
+[inputs]
+retail_pe      = "<work_dir>/data/ds2/retail/ds2_disc1.pe"
+anchors        = "<work_dir>/data/ds2/lane5_admitted_ds2_retail_v2.tsv"
+keyed_feed     = "<work_dir>/docs/audit/r1-13-pdb-evidence-map-2026-10-05/v2/feed_candidates.tsv"
+mangled_names  = "../../../config/symbols_lane5_admitted.tsv"
+manual_accepts = "../../../config/residue_manual.tsv"
+undeterminable = "../../../config/undeterminable.tsv"
+source_roots   = "../../../config/source_roots.tsv"
+manual_names   = "../../../config/manual_names.tsv"           # hand-reviewed HIGH names (stage M)
+extent_allowlist = "../../../config/flaw_sweep_allowlist.tsv" # ReXGlue boundary choices (X0: excluded from LOO)
+undname        = "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/undname.exe"
+# evidence_map = "..."   # set to reuse an existing map instead of running E1
+
+[[prototype]]
+role  = "primary"
+label = "f"
+pe    = "<work_dir>/data/lanes/pe/ds2_f.pe"
+pdb   = "<pdb_dir>/deadspace_f.pdb"
+
+[[prototype]]
+role  = "aux"
+label = "q"
+pe    = "<work_dir>/data/lanes/pe/ds2_q.pe"
+pdb   = "<pdb_dir>/deadspace_q.pdb"
+
+[[prototype]]
+role  = "aux"
+label = "d"
+pe    = "<work_dir>/data/lanes/pe/ds2_d.pe"
+pdb   = "<pdb_dir>/deadspace_d.pdb"
+
+[registered]
+adapter = "rexglue"
+path    = "../../../app/generated"
+
+[pdb]
+reader_dir = "<xb360_toolkit>/lanes"
+
+[pins]   # external helpers, sha256 (the chain refuses on mismatch; the PDB reader pair is required)
+"<xb360_toolkit>/lanes/identity_donor.py" = "7a86eb582dd52ece3c7d5bcf8ca12f2cd4392af928b695d0398c9c40799d4b11"
+"<xb360_toolkit>/lanes/identity_image.py" = "0e03cde8673b49a9e879f2c9d5b2017fadf45a22dc760e94841aff07e89dbb95"
+"<DeSwitch>/tools/deswitch_srcpaths.py" = "385135f6c187ee0bc42285335eab497c34185ab5d849a7a8491bef2a44060206"
+"<DeSwitch>/tools/deswitch_srctree.py" = "f88211fd9e9199faa92dc300411a2b6d3f82fbd9d50b8dccd144d8e8915ded3e"
+"<work_dir>/tools/r1_13_pdb_evidence_map_v2.py" = "1c1027a2ae5f81215e9363df262fb41129c8078f8fe819f3745b7837352afcfd"
+
+[gate]
+precision = 0.99
+control   = 0.01
+salt      = "pdbchain-split-v1"
+wilson    = 0.99   # every stage: Wilson 95% lower bound over all decisions >= 0.99
+
+[gate.overrides.E1_EVIDENCE_BYTES]
+precision = 0.999
+control   = 0.001
+reason    = "R1-13 v1 gates (stricter than default): LOO >= 0.999, shift+4 EXACT <= 0.1% of positive"
+
+[gate.overrides.E1_EVIDENCE_NAMES]
+precision = 0.999
+control   = 0.001
+reason    = "R1-13 v1 gates (stricter than default): LOO >= 0.999, shuffle admitted <= 0.1% of positive"
+
+[gate.overrides.A2_LINK_BRACKET]
+control = 0.05
+reason  = "label-permutation chance floor 418/29,380 = 1.4% (objs own many scattered contributions); build_allocation gated A2 on LOO only (29,378/29,380); delta-shift controls are not must-fail (same obj)"
+
+[gate.overrides.A5_INFERRED]
+control = 0.05
+reason  = "DS2 build_allocation gate: label-shuffle control <= 0.05 (measured 16/549 = 2.9%); precision bar unchanged"
+
+[gate.overrides.T4_TRAILING_BLR]
+wilson = 0.99
+reason = "close-out 2026-10-07 item 1: T4's 370/370 had Wilson lower 0.98972; the stage is admitted only when the enlarged known-answer sample's Wilson 95% lower bound is >= 0.99"
+
+[evidence]
+code_window  = ["0x82000000", "0x83000000"]
+n_delta      = 2
+exact_min    = 16
+shuffle_seed = 1313
+
+[allocation]
+data_owner_population = 1000000   # A7 LOO on every eligible known answer (was 4,000)
+closeout_sample = 1000000         # A6 LOO on every anchor (was 8,000)
+experimental = []
+manual_basis = "config/residue_manual.tsv"
+undeterminable_basis = "config/undeterminable.tsv"
+
+[naming]
+methods = ["N1", "N2", "N3", "N4", "N5", "N6", "N7", "N9"]
+experimental = []
+
+[output]
+dir = "../../../build/pdbchain/dev"

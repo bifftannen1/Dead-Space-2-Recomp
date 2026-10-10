@@ -1,3 +1,5 @@
+![Dead Space 2](docs/img/header.jpg)
+
 # Dead Space 2 Recomp
 
 > No game data is included. You need your own retail copy of Dead Space 2 to build and play.
@@ -36,10 +38,11 @@ Requirements and options: [docs/BUILDING.md](docs/BUILDING.md).
 | `src/app/` | Host app (`ds2.exe`) |
 | `src/modapi/`, `mods/` | Mod API and example mods |
 | `sdk/` | Pinned ReXGlue commit and the DS2 patch |
-| `tools/` | Build, XEX extraction, smoke test, object comparison, mod generators |
+| `tools/` | Build, XEX extraction, smoke test, object comparison, mod generators, `pdbchain` (PDB matching) |
 
 ## Docs
 - [BUILDING.md](docs/BUILDING.md): build, run, smoke test
 - [MODDING.md](docs/MODDING.md): hooks by PDB name, loose files, PDB struct headers
 - [NAMED_TREE.md](docs/NAMED_TREE.md): how functions got their names and files
+- [PDB_MATCHING.md](docs/PDB_MATCHING.md): matching tools, method and timeline
 - [REGENERATING.md](docs/REGENERATING.md): refreshing `src/` from the pipeline repo
