@@ -6,14 +6,16 @@ How the retail functions got their names and source files from the prototype PDB
 | Tool | Role |
 |---|---|
 | [`tools/pdbchain/`](../tools/pdbchain/README.md) | Maps every recompiled retail function to its prototype object file, source file and PDB name. Title-agnostic; each stage is gated on measured precision. |
-| `organize_generated.py` (DS2Recomp) | Writes the codegen output into the named tree and verifies it byte for byte |
+| `tools/pdbreader/` | PDB (MSF/DBI/TPI) and PE reader that pdbchain uses (`identity_donor.py`, `identity_image.py`) |
+| `tools/deswitch/` | Source-path normalisation and tree helpers that pdbchain's path rules mirror |
+| `tools/organize_generated.py` | Writes the codegen output into the named tree and verifies it byte for byte (expects the DS2Recomp layout: `app/generated`, `config/`) |
 | `tools/diagnostics/compare_objs_exact.py` | Proves the named build's objects equal the flat codegen build's |
 | `tools/modapi/gen_hooks.py`, `gen_types.py` | Turn the name table and PDB types into the mod API |
 | `llvm-pdbutil` | Independent PDB reader used to cross-check results |
 
-pdbchain also needs an external PDB/PE reader (`identity_donor.py`, `identity_image.py`), pinned
-by sha256 in the config. The example configs in `tools/pdbchain/examples/` use placeholder
-paths (`<pdb_dir>`, `<work_dir>`, …) to fill in.
+The helpers are pinned by sha256 in the config. The example configs in
+`tools/pdbchain/examples/` use placeholders (`<repo>`, `<pdb_dir>`, `<work_dir>`) to fill in.
+`deswitch_srctree.py` needs `pip install itanium_demangler`.
 
 ## Inputs
 - Retail Disc 1 `default.xex` (Title ID `454108DF`), extracted to its PE

@@ -37,14 +37,13 @@ adapter = "rexglue"
 path    = "../../../app/generated"
 
 [pdb]
-reader_dir = "<xb360_toolkit>/lanes"
+reader_dir = "<repo>/tools/pdbreader"
 
 [pins]   # external helpers, sha256 (the chain refuses on mismatch; the PDB reader pair is required)
-"<xb360_toolkit>/lanes/identity_donor.py" = "7a86eb582dd52ece3c7d5bcf8ca12f2cd4392af928b695d0398c9c40799d4b11"
-"<xb360_toolkit>/lanes/identity_image.py" = "0e03cde8673b49a9e879f2c9d5b2017fadf45a22dc760e94841aff07e89dbb95"
-"<DeSwitch>/tools/deswitch_srcpaths.py" = "385135f6c187ee0bc42285335eab497c34185ab5d849a7a8491bef2a44060206"
-"<DeSwitch>/tools/deswitch_srctree.py" = "f88211fd9e9199faa92dc300411a2b6d3f82fbd9d50b8dccd144d8e8915ded3e"
-"<work_dir>/tools/r1_13_pdb_evidence_map_v2.py" = "1c1027a2ae5f81215e9363df262fb41129c8078f8fe819f3745b7837352afcfd"
+"<repo>/tools/pdbreader/identity_donor.py" = "7a86eb582dd52ece3c7d5bcf8ca12f2cd4392af928b695d0398c9c40799d4b11"
+"<repo>/tools/pdbreader/identity_image.py" = "0e03cde8673b49a9e879f2c9d5b2017fadf45a22dc760e94841aff07e89dbb95"
+"<repo>/tools/deswitch/deswitch_srcpaths.py" = "385135f6c187ee0bc42285335eab497c34185ab5d849a7a8491bef2a44060206"
+"<repo>/tools/deswitch/deswitch_srctree.py" = "f88211fd9e9199faa92dc300411a2b6d3f82fbd9d50b8dccd144d8e8915ded3e"
 
 [gate]
 precision = 0.99
