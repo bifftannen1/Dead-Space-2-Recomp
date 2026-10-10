@@ -12,8 +12,8 @@ original source folders, real function names, original file boundaries.
 Dead Space 2 already has an official PC release; this project isn't a replacement for it.
 It has two goals:
 - **Portability:** turn the 360 version into plain C++ that can move to ARM devices (Switch and others).
-- **PDB mapping:** test how far a prototype PDB can name and place recompiled code, with
-  every name and source file backed by measured precision.
+- **PDB mapping:** test how far a prototype PDB can name and place recompiled code directly,
+  with no decompilation step, with every name and source file backed by measured precision.
 
 Mods are supported through a hook API keyed by those PDB names.
 
