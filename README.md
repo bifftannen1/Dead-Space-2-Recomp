@@ -15,6 +15,10 @@ Built with future ARM ports (Switch) and mods in mind.
 | Retail | *Dead Space 2 (World) (En,Fr,Es)*, Disc 1 `default.xex`, Title ID `454108DF`, Media ID `2915C8F8` |
 | PDB | `deadspace_f.pdb`, 2010-11-19 prototype build |
 
+The prototype is a near-exact match for retail: of 22,976 functions compared by compiled size,
+22,962 (99.94%) are identical. The 14 that differ are all XDK runtime code (CRT file I/O, heap);
+the game's own code matches throughout.
+
 ## Quick start
 You need your own Dead Space 2 Disc 1 image (the XEX must match sha256 `928597dd…3408`).
 ```
