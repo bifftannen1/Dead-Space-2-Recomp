@@ -10,6 +10,16 @@ original source folders, real function names, original file boundaries.
 
 Built with future ARM ports (Switch) and mods in mind.
 
+## Target and symbols
+| | |
+|---|---|
+| Recompiled binary | Retail `default.xex`, Disc 1, *Dead Space 2 (World) (En,Fr,Es)* |
+| Title ID / Media ID | `454108DF` / `2915C8F8` (region-free, build of 2010-12-03) |
+| Names and layout | `deadspace_f.pdb` from a 2010-11-19 prototype build (final config), with the matching `_q` and `_d` prototype PDBs used to cross-check placements |
+
+The prototype predates retail by two weeks, so its names are mapped onto the retail binary by
+measured matching rather than copied directly (see [NAMED_TREE.md](docs/NAMED_TREE.md)).
+
 ## Quick start
 You need your own Dead Space 2 Disc 1 image (the XEX must match sha256 `928597dd…3408`).
 ```
