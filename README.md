@@ -2,7 +2,7 @@
 
 # Dead Space 2 Recomp
 
-> No game data is included. You need your own retail copy of Dead Space 2 to build and play.
+> **Work in progress.** No game data is included. You need your own retail copy of Dead Space 2 to build and play.
 
 A static recompilation of the Xbox 360 version of Dead Space 2 that runs natively on PC.
 The whole game executable (47,419 functions) is translated to C++ by
