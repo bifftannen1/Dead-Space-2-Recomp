@@ -50,7 +50,7 @@ Crash reports: configure with `-DDS2_CRASHDUMP=ON` (off by default). On an unhan
 violation the game writes `ds2_crash_N.txt` (registers and host stack as module offsets) and
 `ds2_crash_N.dmp` to its working directory, and the linker writes `bin\ds2.map`. Resolve the
 stack to recompiled function names with
-`python tools\symbolize_crash.py buildin\ds2.map ds2_crash_0.txt`.
+`python tools\symbolize_crash.py build\bin\ds2.map ds2_crash_0.txt`.
 
 ## DLC (Severed)
 ```
