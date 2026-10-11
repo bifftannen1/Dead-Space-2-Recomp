@@ -95,6 +95,7 @@ rc->perspective.fovRadians *= 1.25f;   // big-endian load/store
 | Mod | Effect |
 |---|---|
 | `fov` | Scales the field of view (`fov_scale`) |
+| `framerate` | 60 FPS (`target_vblanks = 1`; the game's own is 2 = 30 FPS). Hooks `EARS::Time::TimeManager::HandleEvents` (game clock target) and `Displ_WaitForFrameLock` (frame pacing). **Disabled, experimental:** holds 60 in most play, dips to ~50 in heavy scenes |
 | `loose_demo` | Replaces `disc1_info.txt`; run `make_loose_demo.py <iso>`, then enable |
 | `intro_skip` | Ends the boot movie early. **Disabled:** skipping before ~6 s breaks the title → menu handoff |
 

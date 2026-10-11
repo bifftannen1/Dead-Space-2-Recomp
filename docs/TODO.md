@@ -27,7 +27,8 @@ Hooks are named from the PDB tree; all of these should be mods or runtime option
    `GetActiveCamAuthoredAspectRatio` (0x8250F488), `RenderContext::RC_RebuildAndApplyProjectionMatrix`
    (0x8250E330; the `fov` mod already hooks it). Needs Hor+ FOV, a non-16:9 back buffer from the runtime
    and HUD/menu anchoring (Apt UI) so the HUD isn't stretched.
-3. **Above 60 FPS.** `EARS::Time::SetTargetFrameRateFields` (0x82522438),
+3. **Above 60 FPS.** 60 works with the `framerate` mod: the game clock target (`g_targetFrameTimeMSec` = 2 x ONE_FRAMETIME, 1/59.94 s) and the frame lock (`Displ_SwapScreens` -> `Displ_WaitForFrameLock(2)`) both pinned the game to 30. Heavy scenes dip to ~50 on the emulated Xenos path; a native renderer (as Hell's Gate did for Dante's Inferno, same engine) is the route past 60.
+   Original notes: `EARS::Time::SetTargetFrameRateFields` (0x82522438),
    `D3DDevice_SetRenderState_PresentInterval` (0x8221B0A8), runtime `vsync` cvar. Risk: gameplay, physics
    (Havok step) and animation may assume a fixed 30/60 Hz step; measure first (frame-time trace,
    physics/animation at 30 vs 60 vs 120) and gate on no gameplay-speed change.
