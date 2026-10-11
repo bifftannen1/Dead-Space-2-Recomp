@@ -28,11 +28,16 @@ Mods are supported through a hook API keyed by those PDB names.
 - **TU2 names:** carried from base by proof. 45,912 are *proven* and 885 *probable*. The probable ones need an opt-in before a mod can hook them.
 - **Disc 2:** with Title Update #2 it patches to an image byte-identical to Disc 1, so the TU2 build runs it too. Switching discs mid-game isn't supported yet ([TODO](docs/TODO.md)).
 - **DLC, *Dead Space 2: Severed*:** working, but **not fully playtested**. The package installs with `tools/extract_dlc.py` and the game mounts it. Severed has been smoke-tested, not played through.
+- **Multiplayer and Xbox Live features** (online play, leaderboards, achievements syncing, marketplace) are **not tested yet**.
+- **Launcher:** coming soon. It will be a single `DS2Launcher.exe` that takes your discs, the title update and the DLC, checks them and starts the game.
 
 ## Sources
 | | |
 |---|---|
-| Retail | *Dead Space 2 (World) (En,Fr,Es)*, Disc 1 `default.xex`, Title ID `454108DF`, Media ID `2915C8F8` |
+| Retail Disc 1 | *Dead Space 2 (World) (En,Fr,Es)*, Disc 1 `default.xex`, Title ID `454108DF`, Media ID `2915C8F8` |
+| Retail Disc 2 | Same release, Disc 2 `default.xex`, Media ID `403243EC` |
+| Title Update | *Dead Space 2 Title Update #2* (`TU_12K226V_000000C000000.00000000000G3`); `disc001/default.xexp` sha256 `8d386d37…01ec2`, which patches the XEX to version `0.0.2.3` |
+| DLC | *Dead Space 2: Severed* (content type `00000002`, package `1B7ECDF8…7E45`) |
 | PDB | `deadspace_f.pdb`, 2010-11-19 prototype build |
 
 The prototype is a near-exact match for retail: of 22,976 functions compared by compiled size,
@@ -41,13 +46,16 @@ the game's own code matches throughout.
 
 ## Quick start
 You need your own Dead Space 2 Disc 1 image (the XEX must match sha256 `928597dd…3408`).
+
+**Recommended: build with Title Update #2** (your own `disc001\default.xexp`):
+```
+python tools\build.py --target tu2 --iso "D:\isos\Dead Space 2 (Disc 1).iso" --xexp "D:\tu2\disc001\default.xexp"
+build\bin\ds2.exe
+```
+Without the title update (the retail build):
 ```
 python tools\build.py --iso "D:\isos\Dead Space 2 (Disc 1).iso"
 build\bin\ds2.exe
-```
-With Title Update #2 (your own `disc001\default.xexp`):
-```
-python tools\build.py --target tu2 --iso "D:\isos\Dead Space 2 (Disc 1).iso" --xexp "D:\tu2\disc001\default.xexp"
 ```
 DLC: `python tools\extract_dlc.py <package> --user-root <folder>`, then `ds2.exe --user_data_root=<folder>`.
 
