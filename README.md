@@ -17,6 +17,18 @@ It has two goals:
 
 Mods are supported through a hook API keyed by those PDB names.
 
+## Status
+| | Base (retail) | TU2 (Title Update #2) |
+|---|---|---|
+| Functions | 47,419 | 47,739 |
+| Named with their PDB name | 46,316 (97.7%) | 46,105 (96.6%) |
+| Placed in their original source file | 47,171 (99.5%) | 47,429 (99.4%) |
+| Boots and plays | yes | yes (smoke-tested; the code is carried from base) |
+
+- **TU2 names:** carried from base by proof. 45,912 are *proven* and 885 *probable*. The probable ones need an opt-in before a mod can hook them.
+- **Disc 2:** with Title Update #2 it patches to an image byte-identical to Disc 1, so the TU2 build runs it too. Switching discs mid-game isn't supported yet ([TODO](docs/TODO.md)).
+- **DLC, *Dead Space 2: Severed*:** working, but **not fully playtested**. The package installs with `tools/extract_dlc.py` and the game mounts it. Severed has been smoke-tested, not played through.
+
 ## Sources
 | | |
 |---|---|
@@ -33,12 +45,19 @@ You need your own Dead Space 2 Disc 1 image (the XEX must match sha256 `928597dd
 python tools\build.py --iso "D:\isos\Dead Space 2 (Disc 1).iso"
 build\bin\ds2.exe
 ```
+With Title Update #2 (your own `disc001\default.xexp`):
+```
+python tools\build.py --target tu2 --iso "D:\isos\Dead Space 2 (Disc 1).iso" --xexp "D:\tu2\disc001\default.xexp"
+```
+DLC: `python tools\extract_dlc.py <package> --user-root <folder>`, then `ds2.exe --user_data_root=<folder>`.
+
 Requirements and options: [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Layout
 | Path | What |
 |---|---|
 | `src/DeadSpace`, `EA`, `EARS`, `Havok`, `XDK`, `BFX` | Recompiled game code, one file per original source file |
+| `src_tu2/` | The same tree for Title Update #2 (`--target tu2`); `src/app` and `src/modapi` are shared |
 | `src/_units/` | 157 build units matching the codegen translation units |
 | `src/symbols.tsv`, `src/ds2_names.h` | Address → PDB name map |
 | `src/app/` | Host app (`ds2.exe`) |

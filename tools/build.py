@@ -171,12 +171,33 @@ def check_sdk(inst: Path) -> None:
         fail(f"SDK install at {inst} lacks {missing}")
 
 
-def step_app(inst: Path, env: dict, jobs: int, bt: Path, mods: bool) -> Path:
+XEXP_SHA256 = "8d386d37e8f71937b9d9c4b34bdbf85240101479c8aaece1002d94e7cdc01ec2"  # Title Update #2, disc001/default.xexp
+
+
+def step_xexp(bindir: Path, target: str, xexp: str | None) -> None:
+    """tu2: stage the pinned TU2 patch next to default.xex. base: remove any staged patch (ds2.exe
+    refuses to run a base build with one)."""
+    dst = bindir / "game" / "default.xexp"
+    if target != "tu2":
+        if dst.exists():
+            os.chmod(dst, 0o666); dst.unlink(); print("xexp: removed", dst, "(base target)")
+        return
+    if not xexp:
+        fail("--target tu2 needs --xexp <Title Update #2 disc001/default.xexp>")
+    got = sha256(Path(xexp))
+    if got != XEXP_SHA256:
+        fail(f"default.xexp sha256 {got} != pinned TU2 {XEXP_SHA256}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(xexp, dst)
+    print("xexp: staged", dst, got)
+
+
+def step_app(inst: Path, env: dict, jobs: int, bt: Path, mods: bool, target: str = "base") -> Path:
     bindir = bt / "bin"
     run(["cmake", "-S", REPO, "-B", bt, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++", "-DCMAKE_CXX_FLAGS=-march=x86-64-v2",
          f"-DCMAKE_PREFIX_PATH={inst}", f"-DCMAKE_RUNTIME_OUTPUT_DIRECTORY={bindir}",
-         f"-DDS2_MODS={'ON' if mods else 'OFF'}"],
+         f"-DDS2_MODS={'ON' if mods else 'OFF'}", f"-DDS2_TARGET={target}"],
         env=env, log=bt / "logs" / "configure.log")
     run(["cmake", "--build", bt, "-j", str(jobs)], env=env, log=bt / "logs" / "build.log")
     exe = bindir / "ds2.exe"
@@ -215,8 +236,13 @@ def main() -> int:
     ap.add_argument("--build-dir", default=str(REPO / "build"))
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 8)
     ap.add_argument("--mods", action="store_true", help="DS2_MODS=ON (mod API + mods/)")
+    ap.add_argument("--target", choices=("base", "tu2"), default="base",
+                    help="base: src/ (retail XEX); tu2: src_tu2/ (with Title Update #2, needs --xexp)")
+    ap.add_argument("--xexp", help="Title Update #2 disc001/default.xexp (required for --target tu2)")
     a = ap.parse_args()
-    for p in (a.xex, a.iso):
+    if a.target == "tu2" and not a.xexp:
+        fail("--target tu2 needs --xexp <Title Update #2 disc001/default.xexp>")
+    for p in (a.xex, a.iso, a.xexp):
         if p and not Path(p).is_file():
             fail(f"not a file: {p}")
     bt = Path(a.build_dir).resolve()
@@ -230,9 +256,10 @@ def main() -> int:
         step_sdk_source(sdk, commit, patch_sha)
         inst = step_sdk_build(sdk, env, a.jobs, bt / "logs")
     check_sdk(inst)
-    exe = step_app(inst, env, a.jobs, bt, a.mods)
+    exe = step_app(inst, env, a.jobs, bt, a.mods, a.target)
     if a.xex or a.iso:
         step_xex(exe.parent, a.xex, a.iso)
+    step_xexp(exe.parent, a.target, a.xexp)
     print(f"total {time.monotonic() - t:.0f}s")
     print("BUILD_OK", exe)
     return 0

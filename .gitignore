@@ -29,3 +29,4 @@ saves/
 cache/
 ds2.toml
 *.log
+/build_tu2/

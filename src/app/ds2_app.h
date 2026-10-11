@@ -24,6 +24,7 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/filesystem/devices/disc_image_device.h>
+#include <rex/filesystem/devices/host_path_device.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
@@ -90,13 +91,31 @@ class Ds2App : public rex::ReXApp {
     vfs->UnregisterDevice("\\Device\\Harddisk0");
     vfs->RegisterSymbolicLink("game:", kCdrom);
     vfs->RegisterSymbolicLink("d:", kCdrom);
-    // This source tree is the base (unpatched) build. A title-update patch next to the XEX would be
-    // applied by the loader to the image while the recompiled code stays pre-patch: refuse it.
     std::error_code ec;
-    if (std::filesystem::is_regular_file(game_data_root() / "default.xexp", ec)) {
-      Fail("game\\default.xexp found: this build is the unpatched (base) recomp and cannot run a title "
-           "update. Remove default.xexp (a TU2 build needs the TU2 source tree, see docs/BUILDING.md).");
+    const bool tu = std::filesystem::is_regular_file(game_data_root() / "default.xexp", ec);
+#if defined(DS2_TARGET_TU2)
+    // TU2 build (src_tu2/): ReXGlue applies <xex>p next to the loaded XEX and the launcher requires the
+    // XEX under game:, so game: is the host folder (default.xex + default.xexp) and d: stays the disc.
+    if (!tu) {
+      Fail("this is the TU2 build: game\\default.xexp (Title Update #2, disc001) is required next to "
+           "default.xex (docs/BUILDING.md).");
     }
+    constexpr const char* kTu = "\\Device\\Ds2TitleUpdate";
+    auto tud = std::make_unique<rex::filesystem::HostPathDevice>(kTu, game_data_root(), true);
+    if (!tud->Initialize() || !vfs->RegisterDevice(std::move(tud))) {
+      Fail("Failed to mount title update folder: " + game_data_root().string());
+    }
+    vfs->UnregisterSymbolicLink("game:");
+    vfs->RegisterSymbolicLink("game:", kTu);
+    REXLOG_INFO("ds2: TU2 build: game: = {} (default.xex + default.xexp), d: = disc", game_data_root().string());
+#else
+    // Base build (src/): a title-update patch would be applied to the image while the recompiled code
+    // stays pre-patch. Refuse it.
+    if (tu) {
+      Fail("game\\default.xexp found: this build is the unpatched (base) recomp and cannot run a title "
+           "update. Remove default.xexp, or build the TU2 target (docs/BUILDING.md).");
+    }
+#endif
     REXLOG_INFO("ds2: mounted {} at {} (game:, d:); loading {}", iso.string(), kCdrom, xex_image);
   }
 

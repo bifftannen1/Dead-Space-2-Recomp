@@ -11,16 +11,29 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(DS2_MODS_DIR "${DS2_ROOT}/mods" CACHE PATH "Mods source folder (manifests + sources + files)")
-set(DS2_NAMES_TSV "${DS2_ROOT}/tools/modapi/symbols_lane5_admitted.tsv" CACHE FILEPATH "PDB name table for hook names")
+# Per target (DS2_TARGET in CMakeLists.txt): hook-name table at that build's addresses, and for tu2 the
+# allocation whose tier=probable rows gen_hooks.py refuses unless a mod sets allow_probable.
+if(DS2_TARGET STREQUAL "tu2")
+    set(_ds2_names_default "${DS2_ROOT}/tools/modapi/symbols_tu2.tsv")
+    set(_ds2_alloc_args --allocation "${DS2_ROOT}/tools/modapi/allocation_tu2.tsv.gz")
+else()
+    set(_ds2_names_default "${DS2_ROOT}/tools/modapi/symbols_lane5_admitted.tsv")
+    set(_ds2_alloc_args)
+endif()
+if(DS2_NAMES_TSV_OVERRIDE)
+    set(DS2_NAMES_TSV "${DS2_NAMES_TSV_OVERRIDE}")
+else()
+    set(DS2_NAMES_TSV "${_ds2_names_default}")
+endif()
 set(_ds2_gen "${CMAKE_BINARY_DIR}/modapi_gen")
 # The registration table that is compiled: the named tree's (organize --ids pdb renames the
 # symbols there, so dispatchers must override the renamed weak symbol) or codegen's.
-set(_ds2_reg "${DS2_SRC}/ds2_rex_diagnostic_register.cpp")
+set(_ds2_reg "${DS2_GEN}/ds2_rex_diagnostic_register.cpp")
 set(_ds2_tool "${DS2_ROOT}/tools/modapi/gen_hooks.py")
 
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${_ds2_tool}" --mods "${DS2_MODS_DIR}" --names "${DS2_NAMES_TSV}"
-            --register "${_ds2_reg}" --out "${_ds2_gen}"
+            --register "${_ds2_reg}" --out "${_ds2_gen}" ${_ds2_alloc_args}
     RESULT_VARIABLE _ds2_rc OUTPUT_VARIABLE _ds2_out ERROR_VARIABLE _ds2_err)
 file(MAKE_DIRECTORY "${_ds2_gen}")
 file(WRITE "${_ds2_gen}/gen_hooks.log" "${_ds2_out}${_ds2_err}")

@@ -23,6 +23,7 @@ Prints `BUILD_OK <exe>` on success.
 | `--xex FILE` | Use an extracted XEX instead of `--iso` |
 | `--sdk-prefix DIR` | Reuse an already installed SDK (same pin and patch) |
 | `--mods` | Build with the mod API (`DS2_MODS=ON`) |
+| `--target base\|tu2`, `--xexp FILE` | Build the retail tree (`src/`, default) or Title Update #2 (`src_tu2/`, needs `--xexp`) |
 | `--build-dir DIR`, `--jobs N` | Output folder, parallel jobs |
 
 ### By hand (SDK installed, VS x64 developer prompt)
@@ -46,14 +47,25 @@ python tools\smoke_test.py C:\path\to\build\bin\ds2.exe C:\path\to\build\smoke
 Prints `SMOKE_RENDERED` if the frame at 70 s is non-blank and the game exits cleanly.
 
 ## DLC (Severed)
-Extract the LIVE package to `<user root>\0000000000000000\454108DF\00000002\<package file name>\` and
-run with `--user_data_root=<user root>`. This needs the DLC fix in `sdk/rexglue_ds2.patch`: without it,
-ReXGlue read a missing content header as success, and the game showed a disc read error.
+```
+python tools\extract_dlc.py "<package file>" --user-root C:\path\to\user
+build\bin\ds2.exe --user_data_root=C:\path\to\user
+```
+`extract_dlc.py` reads the package's own file table. It writes to
+`<user root>\0000000000000000\<title id>\<content type>\<package file name>\`, the layout the runtime mounts, and checks
+every file's size. `--list` lists the contents without writing anything. The DLC also needs the fix in
+`sdk/rexglue_ds2.patch`: without it, ReXGlue read a missing content header as success and the game showed a disc read
+error. Status: working, but not fully playtested.
 
-## Title updates
-This repo's `src/` is the unpatched retail build. A Title Update (`default.xexp`) changes the code, so it
-needs its own recompiled tree (the TU2 target is in the pipeline repo, built with `--target tu2`).
-`ds2.exe` refuses to start if a `default.xexp` is staged next to the XEX.
+## Title Update #2 (`--target tu2`)
+```
+python tools\build.py --target tu2 --iso "D:\isos\Dead Space 2 (Disc 1).iso" --xexp "D:\tu2\disc001\default.xexp"
+```
+- A title update changes the code, so it has its own recompiled tree, `src_tu2/`.
+- `--xexp` is pinned (sha256 `8d386d37…01ec2`). It's staged as `build\bin\game\default.xexp`, and the loader applies it at runtime.
+- The ISO stays mounted as `d:` for all game data, and `game:` is the `game\` folder (XEX plus patch).
+- A base build refuses to start with a `.xexp` staged; a TU2 build refuses to start without one.
+- Disc 2 with its own `disc002\default.xexp` patches to the same image, so the TU2 build runs it too.
 
 ## Verify against the pipeline build
 `tools/diagnostics/compare_objs_exact.py` compares guest objects byte for byte (ignoring debug
