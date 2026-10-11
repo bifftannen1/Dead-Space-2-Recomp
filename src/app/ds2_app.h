@@ -90,6 +90,13 @@ class Ds2App : public rex::ReXApp {
     vfs->UnregisterDevice("\\Device\\Harddisk0");
     vfs->RegisterSymbolicLink("game:", kCdrom);
     vfs->RegisterSymbolicLink("d:", kCdrom);
+    // This source tree is the base (unpatched) build. A title-update patch next to the XEX would be
+    // applied by the loader to the image while the recompiled code stays pre-patch: refuse it.
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(game_data_root() / "default.xexp", ec)) {
+      Fail("game\\default.xexp found: this build is the unpatched (base) recomp and cannot run a title "
+           "update. Remove default.xexp (a TU2 build needs the TU2 source tree, see docs/BUILDING.md).");
+    }
     REXLOG_INFO("ds2: mounted {} at {} (game:, d:); loading {}", iso.string(), kCdrom, xex_image);
   }
 

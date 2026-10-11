@@ -1,0 +1,85 @@
+# DS2 TU2: retail disc 1 + Title Update 2 (patched image assembled from the codegen load)
+[inputs]
+retail_pe     = "../../../build/tu2/ds2_tu2.pe"       # tools/tu2/mkpe.py
+mangled_names = "../../../build/tu2/mangled.tsv"
+source_roots  = "../../../config/source_roots.tsv"
+undeterminable = "<repo>/config/tu2/undeterminable.tsv"
+undname       = "<msvc>/undname.exe"
+
+[prev_build]   # V0: carry the previous build's proven rows (docs/TU2_METHOD_RECOMMENDATIONS.md)
+generated  = "../../../build/base_generated"          # base target codegen (app/generated after --target base)
+allocation = "../../../config/allocation.tsv.gz"
+names      = "../../../config/names.tsv.gz"
+images     = "../../../build/tu2/img"                # REX_DUMP_IMAGE dumps: base.* and tu2.*
+evidence   = "../../../build/pdbchain/ds2/evidence_map.tsv.gz"   # base pdbchain output
+
+[[prototype]]
+role  = "primary"
+label = "f"
+pe    = "<work_dir>/pe/ds2_f.pe"
+pdb   = "<pdb_dir>/deadspace_f.pdb"
+
+[[prototype]]
+role  = "aux"
+label = "q"
+pe    = "<work_dir>/pe/ds2_q.pe"
+pdb   = "<pdb_dir>/deadspace_q.pdb"
+
+[[prototype]]
+role  = "aux"
+label = "d"
+pe    = "<work_dir>/pe/ds2_d.pe"
+pdb   = "<pdb_dir>/deadspace_d.pdb"
+
+[registered]
+adapter = "rexglue"
+path    = "../../../app/generated"
+
+[pdb]
+reader_dir = "<repo>/tools/pdbreader"
+
+[pins]
+"<repo>/tools/pdbreader/identity_donor.py" = "7a86eb582dd52ece3c7d5bcf8ca12f2cd4392af928b695d0398c9c40799d4b11"
+"<repo>/tools/pdbreader/identity_image.py" = "0e03cde8673b49a9e879f2c9d5b2017fadf45a22dc760e94841aff07e89dbb95"
+
+[gate]
+precision = 0.99
+control   = 0.01
+salt      = "pdbchain-split-v1"
+wilson    = 0.99
+
+[gate.overrides.E1_EVIDENCE_BYTES]
+precision = 0.999
+control   = 0.001
+reason    = "as ds2.toml"
+
+[gate.overrides.E1_EVIDENCE_NAMES]
+precision = 0.999
+control   = 0.001
+reason    = "as ds2.toml"
+
+[gate.overrides.A2_LINK_BRACKET]
+control = 0.05
+reason  = "as ds2.toml"
+
+[gate.overrides.A5_INFERRED]
+control = 0.05
+reason  = "as ds2.toml"
+
+[evidence]
+code_window  = ["0x82000000", "0x83000000"]
+n_delta      = 2
+exact_min    = 16
+shuffle_seed = 1313
+
+[allocation]
+data_owner_population = 1000000
+closeout_sample = 1000000
+experimental = []
+
+[naming]
+methods = ["N1", "N2", "N3", "N4", "N5", "N6", "N7", "N9"]
+experimental = []
+
+[output]
+dir = "../../../build/pdbchain/tu2"

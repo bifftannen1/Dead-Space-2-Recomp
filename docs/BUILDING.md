@@ -45,6 +45,16 @@ python tools\smoke_test.py C:\path\to\build\bin\ds2.exe C:\path\to\build\smoke
 ```
 Prints `SMOKE_RENDERED` if the frame at 70 s is non-blank and the game exits cleanly.
 
+## DLC (Severed)
+Extract the LIVE package to `<user root>\0000000000000000\454108DF\00000002\<package file name>\` and
+run with `--user_data_root=<user root>`. This needs the DLC fix in `sdk/rexglue_ds2.patch`: without it,
+ReXGlue read a missing content header as success, and the game showed a disc read error.
+
+## Title updates
+This repo's `src/` is the unpatched retail build. A Title Update (`default.xexp`) changes the code, so it
+needs its own recompiled tree (the TU2 target is in the pipeline repo, built with `--target tu2`).
+`ds2.exe` refuses to start if a `default.xexp` is staged next to the XEX.
+
 ## Verify against the pipeline build
 `tools/diagnostics/compare_objs_exact.py` compares guest objects byte for byte (ignoring debug
 sections) against a DS2Recomp build; expected result `EXACT PASS` 159/159. Each object embeds

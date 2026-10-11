@@ -48,6 +48,10 @@ fov_scale = 1.25
 ```
 The manifest must list every hook and call the sources use; the build fails otherwise.
 
+On a build whose names were carried from another build (a title update), names have a tier: *proven* or
+*probable*. `gen_hooks.py --allocation <allocation.tsv.gz>` refuses a hook or call on a probable name unless the
+manifest sets `allow_probable = true` under `[mod]`. This repo's names are all PDB-derived and have no tier.
+
 ## Hooks
 ```cpp
 #include "ds2_modapi.h"

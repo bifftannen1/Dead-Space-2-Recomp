@@ -106,7 +106,7 @@ def c_str(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def generate(mods_dir: Path, names_path: Path, register_path: Path) -> tuple[dict[str, str], dict]:
+def generate(mods_dir: Path, names_path: Path, register_path: Path, probable=frozenset()) -> tuple[dict[str, str], dict]:
     names = load_names(names_path)
     registered = load_register(register_path)
     manifests = sorted(mods_dir.glob("*.toml"))
@@ -153,11 +153,17 @@ def generate(mods_dir: Path, names_path: Path, register_path: Path) -> tuple[dic
             va = resolve(h, names)
             if va not in registered:
                 raise Fail(f"call '{h}' -> 0x{va:08X} is not a function in the codegen table")
+            if va in probable and not mod.get("allow_probable"):
+                raise Fail(f"{mp}: call '{h}' -> 0x{va:08X} has a probable-tier name (V0, not proven); "
+                           "set allow_probable = true in [mod] to accept it")
             calls.setdefault(h, {"va": va, "mods": []})["mods"].append(name)
         for h in listed:
             va = resolve(h, names)
             if va not in registered:
                 raise Fail(f"hook '{h}' -> 0x{va:08X} is not a function in the codegen table")
+            if va in probable and not mod.get("allow_probable"):
+                raise Fail(f"{mp}: hook '{h}' -> 0x{va:08X} has a probable-tier name (V0, not proven); "
+                           "set allow_probable = true in [mod] to accept it")
             e = hooks.setdefault(h, {"va": va, "mods": []})
             e["mods"].append(name)
     by_va: dict[int, list[str]] = {}
@@ -311,6 +317,7 @@ def main() -> int:
     ap.add_argument("--names")
     ap.add_argument("--register")
     ap.add_argument("--out")
+    ap.add_argument("--allocation", help="allocation.tsv.gz: rows with tier=probable in basis are not hookable by default")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -318,7 +325,15 @@ def main() -> int:
     if not (a.mods and a.names and a.register and a.out):
         ap.error("--mods, --names, --register and --out are required")
     try:
-        files, rc = generate(Path(a.mods).resolve(), Path(a.names).resolve(), Path(a.register).resolve())
+        probable = frozenset()
+        if a.allocation and Path(a.allocation).is_file():
+            import gzip
+            with gzip.open(a.allocation, "rt", encoding="utf-8") as f:
+                hdr = f.readline().rstrip("\n").split("\t")
+                ia, ib = hdr.index("addr"), hdr.index("basis")
+                probable = frozenset(int(r[ia], 16) for r in (l.rstrip("\n").split("\t") for l in f) if "tier=probable" in r[ib])
+            print(f"probable-tier addresses (not hookable without allow_probable): {len(probable)}")
+        files, rc = generate(Path(a.mods).resolve(), Path(a.names).resolve(), Path(a.register).resolve(), probable)
     except Fail as e:
         print("GEN_HOOKS_FAIL", e)
         return 1

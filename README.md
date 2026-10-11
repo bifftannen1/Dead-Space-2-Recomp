@@ -44,7 +44,7 @@ Requirements and options: [docs/BUILDING.md](docs/BUILDING.md).
 | `src/app/` | Host app (`ds2.exe`) |
 | `src/modapi/`, `mods/` | Mod API and example mods |
 | `sdk/` | Pinned ReXGlue commit and the DS2 patch |
-| `tools/` | Build, XEX extraction, smoke test, object comparison, mod generators, `pdbchain` (PDB matching) |
+| `tools/` | Build, XEX extraction, smoke test, object comparison, mod generators, `pdbchain` (PDB matching, including `V0_PREV_BUILD` for carrying names to a new build), `tu2/` (build-to-build tooling) |
 
 ## Docs
 - [BUILDING.md](docs/BUILDING.md): build, run, smoke test
@@ -52,3 +52,4 @@ Requirements and options: [docs/BUILDING.md](docs/BUILDING.md).
 - [NAMED_TREE.md](docs/NAMED_TREE.md): how functions got their names and files
 - [PDB_MATCHING.md](docs/PDB_MATCHING.md): matching tools, method and timeline
 - [REGENERATING.md](docs/REGENERATING.md): refreshing `src/` from the pipeline repo
+- [TODO.md](docs/TODO.md): roadmap (raw mouse, ultrawide, above 60 FPS, graphics options, multiplayer, disc swap)

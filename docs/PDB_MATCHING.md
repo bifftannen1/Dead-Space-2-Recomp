@@ -6,6 +6,8 @@ How the retail functions got their names and source files from the prototype PDB
 | Tool | Role |
 |---|---|
 | [`tools/pdbchain/`](../tools/pdbchain/README.md) | Maps every recompiled retail function to its prototype object file, source file and PDB name. Title-agnostic; each stage is gated on measured precision. |
+| `tools/pdbchain/stages/prevbuild.py` | Stage `V0_PREV_BUILD`: carries a previous build's names and files to a new build (for example a title update) by proof, before the PDB stages run. Proven tier: Wilson lower bound ≥ 0.99; probable tier: precision ≥ 0.99 and Wilson ≥ 0.95 (not hookable by mods by default) |
+| `tools/tu2/` | Build-to-build tooling: ground-truth audit (`gt.py`), pointer-seed scan and pruner, PE assembly from an image dump, tree diff |
 | `tools/pdbreader/` | PDB (MSF/DBI/TPI) and PE reader that pdbchain uses (`identity_donor.py`, `identity_image.py`) |
 | `tools/deswitch/` | Source-path normalisation and tree helpers that pdbchain's path rules mirror |
 | `tools/organize_generated.py` | Writes the codegen output into the named tree and verifies it byte for byte (expects the DS2Recomp layout: `app/generated`, `config/`) |
@@ -43,5 +45,7 @@ control and a held-out split. A second run must change 0 files.
 | 2026-10-08 | ≥ 0.99 bar on every stage; T8/T9 added; 203 functions left unplaceable | 46,578 |
 | 2026-10-08 | Real PDB identifiers replace `sub_<ADDR>` in the source tree | |
 | 2026-10-10 | Public source release | |
+| 2026-10-10 | Title Update #2 build: names carried across the relink by proof (98.9% kept order) | |
+| 2026-10-11 | `V0_PREV_BUILD` stage with proven/probable tiers; regression byte-identical to the original chain | 46,797 carried to TU2 |
 
 Result: 46,578 of 47,695 functions named; see [NAMED_TREE.md](NAMED_TREE.md).

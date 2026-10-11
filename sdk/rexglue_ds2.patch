@@ -6512,3 +6512,64 @@ index da323e9..7ef9b60 100644
  	#define RENDERDOC_CC
  #else
  	#error "Unknown platform"
+diff --git a/src/system/xam/content_manager.cpp b/src/system/xam/content_manager.cpp
+index bd6c797..ca228a6 100644
+--- a/src/system/xam/content_manager.cpp
++++ b/src/system/xam/content_manager.cpp
+@@ -156,8 +156,8 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(uint32_t device
+     }
+ 
+     XCONTENT_AGGREGATE_DATA content_data;
+-    if (XSUCCEEDED(ReadContentHeaderFile(rex::path_to_utf8(file_info.name), xuid, title_id,
+-                                         content_type, content_data))) {
++    if (ReadContentHeaderFile(rex::path_to_utf8(file_info.name), xuid, title_id, content_type,
++                              content_data) == X_ERROR_SUCCESS) {
+       result.emplace_back(std::move(content_data));
+     } else {
+       content_data.device_id = device_id;
+diff --git a/src/codegen/codegen_context.cpp b/src/codegen/codegen_context.cpp
+index b956713..2aa0a9b 100644
+--- a/src/codegen/codegen_context.cpp
++++ b/src/codegen/codegen_context.cpp
+@@ -1,3 +1,5 @@
++#include <cstdio>
++#include <cstdlib>
+ /**
+  * @file        rexcodegen/codegen_context.cpp
+  *
+@@ -67,6 +69,12 @@ Result<CodegenContext> CodegenContext::Create(const std::filesystem::path& confi
+   }
+ 
+   ctx.binary_ = BinaryView::fromModule(*module);
++  if (const char* dump = std::getenv("REX_DUMP_IMAGE")) {  // DS2 TU2 scan aid (local only)
++    for (const auto& sec : ctx.binary_.sections()) {
++      auto f = std::fopen(fmt::format("{}.{:08X}.{}.bin", dump, sec.baseAddress, sec.executable ? "x" : "d").c_str(), "wb");
++      if (f) { std::fwrite(sec.data, 1, sec.size, f); std::fclose(f); }
++    }
++  }
+   ctx.resolver_ = runtime.export_resolver();
+ 
+   REXCODEGEN_TRACE("Loaded XEX: base=0x{:08X}, size=0x{:X}, entry=0x{:08X}",
+diff --git a/src/codegen/project_recompiler.cpp b/src/codegen/project_recompiler.cpp
+index 240bcb0..82bff73 100644
+--- a/src/codegen/project_recompiler.cpp
++++ b/src/codegen/project_recompiler.cpp
+@@ -1,3 +1,5 @@
++#include <cstdio>
++#include <cstdlib>
+ /**
+  * @file        codegen/project_recompiler.cpp
+  * @brief       Project-level recompiler driving manifest-based multi-binary codegen
+@@ -308,6 +310,12 @@ Result<void> ProjectRecompiler::Run(const ProjectRecompilerOptions& opts) {
+   {
+     auto execMod = runtime->kernel_state()->GetExecutableModule();
+     auto bv = BinaryView::fromModule(*execMod->xex_module());
++    if (const char* dump = std::getenv("REX_DUMP_IMAGE")) {  // DS2 TU2 scan aid (local only)
++      for (const auto& sec : bv.sections()) {
++        auto f = std::fopen(fmt::format("{}.{:08X}.{}.bin", dump, sec.baseAddress, sec.executable ? "x" : "d").c_str(), "wb");
++        if (f) { std::fwrite(sec.data, 1, sec.size, f); std::fclose(f); }
++      }
++    }
+ 
+     auto entry_display = make_display_name(targeted[0].config.filePath);
+     RecompilerConfig cfg = std::move(targeted[0].config);

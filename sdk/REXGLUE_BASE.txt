@@ -1,7 +1,7 @@
 upstream_repo = https://github.com/rexglue/rexglue-sdk.git
 upstream_commit = c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
 upstream_tag = v0.10.0 (commit message "Release v0.10.0", 2026-08-21)
-patch_sha256 = f70cce3f3911b81ea555e1af37491de11d3370b1ba0fc6a54509458dbc74cb92
+patch_sha256 = 08a8a32c9dcd9c51bebe2dfc813066cbe3d7c60fa4ce87b74e6aca62cd56de90
 ds2_switch_port_import_commit = ce73243c0e29d3762291ee53c8824c5743b9e28c
 
 # ce73243c is the local "ARCHIVE IMPORT - NOT UPSTREAM HEAD" commit in ds2_switch_port

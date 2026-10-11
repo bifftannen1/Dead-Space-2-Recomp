@@ -21,6 +21,7 @@ from .readers.pe import PEImage, reader
 from .stages import allocation as ALLOC
 from .stages import evidence as EVID
 from .stages import naming as NAMING
+from .stages import prevbuild as PREV
 from . import devcache as DEVC
 from .util import Writer, sha256_bytes, sha256_file, table_text, tsv
 
@@ -71,6 +72,9 @@ def load_config(path):
         cfg["registered"]["path"] = res(cfg["registered"]["path"])
     if cfg.get("registered", {}).get("calls"):
         cfg["registered"]["calls"] = res(cfg["registered"]["calls"])
+    for k in ("generated", "allocation", "names", "images", "evidence"):
+        if cfg.get("prev_build", {}).get(k):
+            cfg["prev_build"][k] = res(cfg["prev_build"][k])
     cfg.setdefault("output", {})["dir"] = res(cfg.get("output", {}).get("dir", "pdbchain_out"))
     return cfg
 
@@ -164,6 +168,14 @@ def main(argv=None) -> int:
         print("PDBCHAIN REFUSED: external helper pin mismatch or missing %s" % bad, file=sys.stderr)
         return 2
 
+    # ---- V0 previous build (optional; absent -> the chain is unchanged) ----
+    carried = {}
+    if cfg.get("prev_build"):
+        cfg["registered"]["path_resolved"] = cfg["registered"]["path"]
+        ctx.engine = engine
+        carried, v0_evmap, receipt["prev_build"] = PREV.run(cfg, ctx, None)
+        if v0_evmap is not None:
+            inputs["evidence_map"] = str(v0_evmap)
     # ---- E1 evidence map ----
     if inputs.get("evidence_map"):
         evmap = inputs["evidence_map"]
@@ -279,7 +291,7 @@ def main(argv=None) -> int:
     # final list check: every pending row resolved by A8, no listed row resolved (stale list),
     # and the table invariant against the listed rows only; shaken with one pending row left
     if pending or a.only != "allocation":
-        left = sorted("0x%08X" % int(r[0], 16) for r in rows if r[2] == "UNDETERMINABLE" and r[3] == ALLOC.PENDING_A8_BASIS)
+        left = sorted("0x%08X" % int(r[0], 16) for r in rows if r[2] == "UNDETERMINABLE" and r[3] == ALLOC.PENDING_A8_BASIS and int(r[0], 16) not in carried)
         stale = sorted(r[0] for r in rows if r[2] == "NAME_MODULE" and int(r[0], 16) in und_listed)
         fin = {"pending_a8": len(pending), "pending_left_n": len(left), "pending_left": left[:20], "listed_rows_resolved_by_a8": stale[:20],
                "clean_passes": ALLOC.check_table(rows, addrs, und_listed)}
@@ -295,6 +307,27 @@ def main(argv=None) -> int:
             return 2
     und = und_listed
 
+    # ---- V0 carry (R7): proven rows replace the chain's rows verbatim ----
+    if carried:
+        regset = set(addrs)
+        carried = {x: r for x, r in carried.items() if x in regset}
+        und_c = und | {x for x, r in carried.items() if r["class"] == "UNDETERMINABLE"}
+        rows = [[carried[int(r[0], 16)][h] for h in ALLOC.HEADER] if int(r[0], 16) in carried else list(r) for r in rows]
+        v0chk = {"clean_passes": ALLOC.check_table(rows, addrs, und_c)}
+        k4 = next(i for i, r in enumerate(rows) if int(r[0], 16) in carried and r[2] != "UNDETERMINABLE")
+        t4 = [list(r) for r in rows]; t4[k4][8] = ""
+        v0chk["blanked_carried_tree_path_detected"] = not ALLOC.check_table(t4, addrs, und_c)
+        receipt["prev_build"]["carry_check"] = v0chk
+        if not all(v0chk.values()):
+            print("PDBCHAIN REFUSED: V0 carry check failed %s" % v0chk, file=sys.stderr)
+            return 2
+        und = und_c
+        alloc_text = table_text(ALLOC.HEADER, rows)
+        if names_text:  # a carried row already holds its name: drop chain names for those addresses
+            lines = names_text.decode("utf-8").split("\n")
+            keep_l = [lines[0]] + [l for l in lines[1:] if l and int(l.split("\t", 1)[0], 16) not in carried]
+            names_text = ("\n".join(keep_l) + "\n").encode("utf-8")
+        nres = {x: v for x, v in nres.items() if x not in carried}
     # ---- residue ----
     res_rows = []
     for r in rows:
