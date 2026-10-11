@@ -80,3 +80,7 @@ Requirements and options: [docs/BUILDING.md](docs/BUILDING.md).
 - [PDB_MATCHING.md](docs/PDB_MATCHING.md): matching tools, method and timeline
 - [REGENERATING.md](docs/REGENERATING.md): refreshing `src/` from the pipeline repo
 - [TODO.md](docs/TODO.md): roadmap (raw mouse, ultrawide, above 60 FPS, graphics options, multiplayer, disc swap)
+
+## Credits
+- **[ReXGlue](https://github.com/rexglue/rexglue-sdk)** and its developers: the Xbox 360 static recompilation toolkit and runtime this project is built on.
+- **[Xenia](https://github.com/xenia-project/xenia)** and its developers ([xenia.jp](https://xenia.jp)): the Xbox 360 emulator whose kernel, GPU (Xenos) and file-system work ReXGlue's runtime builds on.
