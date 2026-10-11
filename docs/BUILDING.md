@@ -46,6 +46,12 @@ python tools\smoke_test.py C:\path\to\build\bin\ds2.exe C:\path\to\build\smoke
 ```
 Prints `SMOKE_RENDERED` if the frame at 70 s is non-blank and the game exits cleanly.
 
+Crash reports: configure with `-DDS2_CRASHDUMP=ON` (off by default). On an unhandled access
+violation the game writes `ds2_crash_N.txt` (registers and host stack as module offsets) and
+`ds2_crash_N.dmp` to its working directory, and the linker writes `bin\ds2.map`. Resolve the
+stack to recompiled function names with
+`python tools\symbolize_crash.py buildin\ds2.map ds2_crash_0.txt`.
+
 ## DLC (Severed)
 ```
 python tools\extract_dlc.py "<package file>" --user-root C:\path\to\user
