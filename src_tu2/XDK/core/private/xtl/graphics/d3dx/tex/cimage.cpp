@@ -247,7 +247,7 @@ DEFINE_REX_FUNC(D3DXTex__d3dx_jpeg_error_exit) {
 	ctx.r3.s64 = ctx.r11.s64 + 144;
 	// bl 0x8295ea00
 	ctx.lr = 0x82A3BC14;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 }
 #endif
 
@@ -414,7 +414,7 @@ DEFINE_REX_FUNC(D3DXTex__d3dx_png_read_error_fn) {
 	// li r4,1
 	ctx.r4.s64 = 1;
 	// b 0x8295ea00
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 	return;
 }
 #endif
@@ -4316,6 +4316,8 @@ loc_82A3D984:
 #if !defined(DS2_UNIT) || (DS2_UNIT == 108 && DS2_LO <= 270 && 270 <= DS2_HI)
 DEFINE_REX_FUNC(D3DXTex__CImage__LoadJPG) {
 	REX_FUNC_PROLOGUE();
+	PPCContext env{};
+	PPCRegister temp{};
 	uint32_t ea{};
 	// mflr r12
 	ctx.r12.u64 = ctx.lr;
@@ -4363,7 +4365,10 @@ DEFINE_REX_FUNC(D3DXTex__CImage__LoadJPG) {
 	REX_STORE_U32(ctx.r1.u32 + 584, ctx.r10.u32);
 	// bl 0x8295ed20
 	ctx.lr = 0x82A3D9E4;
-	setjmp_8295ED20(ctx, base);
+	env = ctx;
+	temp.s64 = ppc_setjmp(ctx.r3.u32);
+	if (temp.s64 != 0) ctx = env;
+	ctx.r3 = temp;
 	// cmpwi r3,0
 	ctx.cr0.compare<int32_t>(ctx.r3.s32, 0, ctx.xer);
 	// bne 0x82a3dac0
@@ -6251,6 +6256,8 @@ loc_82A3E6F4:
 #if !defined(DS2_UNIT) || (DS2_UNIT == 58 && DS2_LO <= 248 && 248 <= DS2_HI)
 DEFINE_REX_FUNC(D3DXTex__CImage__LoadPNG) {
 	REX_FUNC_PROLOGUE();
+	PPCContext env{};
+	PPCRegister temp{};
 	uint32_t ea{};
 	// mflr r12
 	ctx.r12.u64 = ctx.lr;
@@ -6335,7 +6342,10 @@ loc_82A3E750:
 	ctx.r3.u64 = REX_LOAD_U32(ctx.r1.u32 + 96);
 	// bl 0x8295ed20
 	ctx.lr = 0x82A3E798;
-	setjmp_8295ED20(ctx, base);
+	env = ctx;
+	temp.s64 = ppc_setjmp(ctx.r3.u32);
+	if (temp.s64 != 0) ctx = env;
+	ctx.r3 = temp;
 	// cmpwi r3,0
 	ctx.cr0.compare<int32_t>(ctx.r3.s32, 0, ctx.xer);
 	// bne 0x82a3eae8

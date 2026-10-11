@@ -220,7 +220,7 @@ loc_82A54AC0:
 	ctx.r3.u64 = ctx.r31.u64;
 	// bl 0x8295ea00
 	ctx.lr = 0x82A54ACC;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 }
 #endif
 
@@ -296,7 +296,7 @@ loc_82A54B24:
 	ctx.r3.u64 = ctx.r31.u64;
 	// bl 0x8295ea00
 	ctx.lr = 0x82A54B30;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 }
 #endif
 

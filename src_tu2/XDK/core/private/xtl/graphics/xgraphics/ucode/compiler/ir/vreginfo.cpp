@@ -1205,7 +1205,7 @@ DEFINE_REX_FUNC(XGRAPHICS__FixedValue__FixedValue) {
 	ctx.r3.s64 = ctx.r31.s64 + 16;
 	// bl 0x8295ea00
 	ctx.lr = 0x82A78648;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 loc_82A78648:
 	// lwz r11,1360(r31)
 	ctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 1360);
@@ -1225,7 +1225,7 @@ loc_82A78648:
 	ctx.r3.s64 = ctx.r31.s64 + 16;
 	// bl 0x8295ea00
 	ctx.lr = 0x82A7866C;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 loc_82A7866C:
 	// lwz r11,1360(r31)
 	ctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 1360);
@@ -1245,7 +1245,7 @@ loc_82A7866C:
 	ctx.r3.s64 = ctx.r31.s64 + 16;
 	// bl 0x8295ea00
 	ctx.lr = 0x82A78690;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 loc_82A78690:
 	// lwz r29,1452(r31)
 	ctx.r29.u64 = REX_LOAD_U32(ctx.r31.u32 + 1452);

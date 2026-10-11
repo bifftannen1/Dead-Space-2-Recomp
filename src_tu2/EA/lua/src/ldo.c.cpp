@@ -195,7 +195,7 @@ DEFINE_REX_FUNC(luaD_throw_8292C128) {
 	ctx.r3.s64 = ctx.r11.s64 + 16;
 	// bl 0x8295ea00
 	ctx.lr = 0x8292C154;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 loc_8292C154:
 	// lwz r11,16(r3)
 	ctx.r11.u64 = REX_LOAD_U32(ctx.r3.u32 + 16);
@@ -222,6 +222,8 @@ loc_8292C154:
 #if !defined(DS2_UNIT) || (DS2_UNIT == 147 && DS2_LO <= 222 && 222 <= DS2_HI)
 DEFINE_REX_FUNC(luaD_rawrunprotected_8292C170) {
 	REX_FUNC_PROLOGUE();
+	PPCContext env{};
+	PPCRegister temp{};
 	uint32_t ea{};
 	// mflr r12
 	ctx.r12.u64 = ctx.lr;
@@ -257,7 +259,10 @@ DEFINE_REX_FUNC(luaD_rawrunprotected_8292C170) {
 	REX_STORE_U32(ctx.r1.u32 + 80, ctx.r10.u32);
 	// bl 0x8295ed20
 	ctx.lr = 0x8292C1B0;
-	setjmp_8295ED20(ctx, base);
+	env = ctx;
+	temp.s64 = ppc_setjmp(ctx.r3.u32);
+	if (temp.s64 != 0) ctx = env;
+	ctx.r3 = temp;
 	// cmpwi cr6,r3,0
 	ctx.cr6.compare<int32_t>(ctx.r3.s32, 0, ctx.xer);
 	// bne cr6,0x8292c1dc
@@ -1158,7 +1163,7 @@ loc_8292C748:
 	ctx.r3.s64 = ctx.r11.s64 + 16;
 	// bl 0x8295ea00
 	ctx.lr = 0x8292C78C;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 loc_8292C78C:
 	// lwz r11,16(r31)
 	ctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 16);
@@ -1877,7 +1882,7 @@ loc_8292CC40:
 	ctx.r3.s64 = ctx.r11.s64 + 16;
 	// bl 0x8295ea00
 	ctx.lr = 0x8292CC70;
-	longjmp_8295EA00(ctx, base);
+	ppc_longjmp(ctx.r3.u32, ctx.r4.s32);
 loc_8292CC70:
 	// lwz r11,16(r31)
 	ctx.r11.u64 = REX_LOAD_U32(ctx.r31.u32 + 16);

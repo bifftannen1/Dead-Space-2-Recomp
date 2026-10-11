@@ -64,6 +64,8 @@ DECLARE_REX_FUNC(setjmp_8295ED20);
 #if !defined(DS2_UNIT) || (DS2_UNIT == 36 && DS2_LO <= 272 && 272 <= DS2_HI)
 DEFINE_REX_FUNC(D3DX__png_create_read_struct) {
 	REX_FUNC_PROLOGUE();
+	PPCContext env{};
+	PPCRegister temp{};
 	uint32_t ea{};
 	// mflr r12
 	ctx.r12.u64 = ctx.lr;
@@ -102,7 +104,10 @@ loc_82A57CE4:
 loc_82A57CEC:
 	// bl 0x8295ed20
 	ctx.lr = 0x82A57CF0;
-	setjmp_8295ED20(ctx, base);
+	env = ctx;
+	temp.s64 = ppc_setjmp(ctx.r3.u32);
+	if (temp.s64 != 0) ctx = env;
+	ctx.r3 = temp;
 	// lwz r31,80(r1)
 	ctx.r31.u64 = REX_LOAD_U32(ctx.r1.u32 + 80);
 	// cmpwi r3,0
