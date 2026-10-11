@@ -63,3 +63,21 @@ struct Install {
   Install() { AddVectoredExceptionHandler(0, Last); }
 } g_install;
 }  // namespace
+
+// Upstream declares perf_log_csv but never opens the file; do it here once cvars are loaded.
+#include <rex/cvar.h>
+#include <rex/perf/counter.h>
+#include <chrono>
+#include <thread>
+REXCVAR_DECLARE(std::string, perf_log_csv);
+namespace {
+struct PerfCsv {
+  PerfCsv() {
+    std::thread([] {
+      std::this_thread::sleep_for(std::chrono::seconds(3));
+      const std::string& p = REXCVAR_GET(perf_log_csv);
+      if (!p.empty()) rex::perf::SetCsvLogPath(p);
+    }).detach();
+  }
+} g_perf_csv;
+}  // namespace

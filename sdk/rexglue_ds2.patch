@@ -6573,3 +6573,143 @@ index 240bcb0..82bff73 100644
  
      auto entry_display = make_display_name(targeted[0].config.filePath);
      RecompilerConfig cfg = std::move(targeted[0].config);
+diff --git a/src/core/cvar.cpp b/src/core/cvar.cpp
+index 228728d..c14a3b2 100644
+--- a/src/core/cvar.cpp
++++ b/src/core/cvar.cpp
+@@ -535,13 +535,36 @@ std::vector<std::string> ListModifiedFlags() {
+   return result;
+ }
+ 
++// DS2: TOML basic strings treat backslash as an escape, so a Windows path written raw
++// made the whole file unparseable on the next start. Escape backslash, quote, newline, tab.
++static std::string TomlQuote(const std::string& v) {
++  constexpr char kBackslash = 92, kQuote = 34;
++  std::string out(1, kQuote);
++  for (char c : v) {
++    if (c == kBackslash || c == kQuote) {
++      out += kBackslash;
++      out += c;
++    } else if (c == 10) {
++      out += kBackslash;
++      out += 'n';
++    } else if (c == 9) {
++      out += kBackslash;
++      out += 't';
++    } else {
++      out += c;
++    }
++  }
++  out += kQuote;
++  return out;
++}
++
+ std::string SerializeToTOML() {
+   std::lock_guard lock(GetRegistryMutex());
+   std::string result;
+   for (const auto& entry : GetRegistryStorage()) {
+     if (entry.getter() != entry.default_value) {
+       if (entry.type == FlagType::String) {
+-        result += entry.name + " = \"" + entry.getter() + "\"\n";
++        result += entry.name + " = " + TomlQuote(entry.getter()) + "\n";
+       } else {
+         result += entry.name + " = " + entry.getter() + "\n";
+       }
+@@ -556,7 +579,7 @@ std::string SerializeToTOML(std::string_view category) {
+   for (const auto& entry : GetRegistryStorage()) {
+     if (entry.category == category && entry.getter() != entry.default_value) {
+       if (entry.type == FlagType::String) {
+-        result += entry.name + " = \"" + entry.getter() + "\"\n";
++        result += entry.name + " = " + TomlQuote(entry.getter()) + "\n";
+       } else {
+         result += entry.name + " = " + entry.getter() + "\n";
+       }
+diff --git a/src/graphics/vulkan/pipeline_cache.cpp b/src/graphics/vulkan/pipeline_cache.cpp
+index e50151a..77e6106 100644
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -142,6 +142,50 @@ VkPipelineCache P4GetPipelineCache(const ui::vulkan::VulkanDevice* vd) {
+   }
+   return c.cache;
+ }
++// Writes the whole VkPipelineCache to p4_vk_pipeline_cache_path. DS2: rewriting it after every
++// pipeline cost ~24 ms each (5 MB file, 233 pipelines in a startup burst) under a lock the
++// creation threads share, and the title hard-exits so Shutdown never runs. Creations now only
++// mark the cache dirty; a background thread writes it at most every 10 s.
++std::atomic<bool> g_p4_dirty{false};
++std::atomic<bool> g_p4_stop{false};
++size_t P4SaveCache(const ui::vulkan::VulkanDevice* vd) {
++  const std::string& path = REXCVAR_GET(p4_vk_pipeline_cache_path);
++  P4PipelineCache& c = p4_pcache();
++  if (path.empty() || c.cache == VK_NULL_HANDLE) return 0;
++  std::vector<uint8_t> d;
++  {
++    std::lock_guard<std::mutex> lock(c.mutex);
++    size_t n = 0;
++    auto get = P4Proc<PFN_vkGetPipelineCacheData>(vd, "vkGetPipelineCacheData");
++    if (!get || get(vd->device(), c.cache, &n, nullptr) != VK_SUCCESS || !n) return 0;
++    d.resize(n);
++    if (get(vd->device(), c.cache, &n, d.data()) != VK_SUCCESS) return 0;
++    d.resize(n);
++  }
++  // Write to a temp file and rename, so a kill mid-write never leaves a torn cache.
++  const std::string tmp = path + ".tmp";
++  size_t saved = 0;
++  if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
++    saved = std::fwrite(d.data(), 1, d.size(), f);
++    std::fclose(f);
++  }
++  std::error_code ec;
++  if (saved == d.size()) std::filesystem::rename(tmp, path, ec);
++  REXGPU_INFO("P4_PCACHE_SAVE bytes={} ok={}", saved, saved == d.size() && !ec);
++  return saved;
++}
++void P4StartSaver(const ui::vulkan::VulkanDevice* vd) {
++  static std::once_flag once;
++  std::call_once(once, [vd] {
++    std::thread([vd] {
++      for (;;) {
++        std::this_thread::sleep_for(std::chrono::seconds(10));
++        if (g_p4_stop) return;
++        if (g_p4_dirty.exchange(false)) P4SaveCache(vd);
++      }
++    }).detach();
++  });
++}
+ void P4AfterPipeline(const ui::vulkan::VulkanDevice* vd, uint64_t vs,
+                      uint64_t ps) {
+   const bool idle = REXCVAR_GET(p4_wait_idle_after_pipeline);
+@@ -157,20 +201,9 @@ void P4AfterPipeline(const ui::vulkan::VulkanDevice* vd, uint64_t vs,
+   }
+   if (settle > 0) std::this_thread::sleep_for(std::chrono::milliseconds(settle));
+   size_t saved = 0;
+-  P4PipelineCache& c = p4_pcache();
+-  if (!path.empty() && c.cache != VK_NULL_HANDLE) {
+-    std::lock_guard<std::mutex> lock(c.mutex);
+-    size_t n = 0;
+-    auto get = P4Proc<PFN_vkGetPipelineCacheData>(vd, "vkGetPipelineCacheData");
+-    if (get && get(device, c.cache, &n, nullptr) == VK_SUCCESS && n) {
+-      std::vector<uint8_t> d(n);
+-      if (get(device, c.cache, &n, d.data()) == VK_SUCCESS) {
+-        if (FILE* f = std::fopen(path.c_str(), "wb")) {
+-          saved = std::fwrite(d.data(), 1, n, f);
+-          std::fclose(f);
+-        }
+-      }
+-    }
++  if (!path.empty()) {
++    g_p4_dirty = true;
++    P4StartSaver(vd);
+   }
+   REXGPU_INFO("P4_PIPE vs={:016X} ps={:016X} wait_idle={} settle_ms={} cache_saved={} us={}", vs, ps,
+               idle ? int32_t(wr) : 1, settle, saved,
+@@ -1136,6 +1169,9 @@ void VulkanPipelineCache::Shutdown() {
+     }
+     creation_threads_.clear();
+   }
++  // DS2: P4 saves happen on a background timer; flush anything pending if we get here.
++  g_p4_stop = true;
++  if (g_p4_dirty.exchange(false)) P4SaveCache(command_processor_.GetVulkanDevice());
+   {
+     std::lock_guard<std::mutex> lock(creation_request_lock_);
+     while (!creation_queue_.empty()) {

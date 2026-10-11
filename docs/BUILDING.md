@@ -40,6 +40,14 @@ gets `-fasync-exceptions -gline-tables-only` and the PCH `src/ds2_rex_diagnostic
 `build\bin\ds2.exe` mounts the ISO from `ds2.toml` (or `--ds2_iso=PATH`, or the first `*.iso`
 next to the exe) and boots `game/default.xex`.
 
+Defaults the app sets (each can be overridden on the command line):
+- `--vulkan_allow_present_mode_immediate=false`: V-Synced presentation. The SDK otherwise picks
+  IMMEDIATE, which tears; `--vsync` only paces the game, not the swapchain.
+- `--p4_vk_pipeline_cache_path=<cache_root>/vk_pipelines.bin`: compiled pipelines are kept between
+  runs (written in the background at most every 10 s), so a shader only stutters the first time.
+
+The game itself runs at 30 FPS, as on the Xbox 360.
+
 Smoke test (use absolute paths):
 ```
 python tools\smoke_test.py C:\path\to\build\bin\ds2.exe C:\path\to\build\smoke

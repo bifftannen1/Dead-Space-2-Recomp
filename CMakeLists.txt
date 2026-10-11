@@ -16,7 +16,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # The working PC build recipe: -O2 instead of the SDK's Release -O3, plus the SDK's global
 # flags, which an installed SDK package does not carry to consumers.
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
+set(DS2_OPT "-O2" CACHE STRING "Release optimisation level (-O2 is the tested default)")
+set(CMAKE_CXX_FLAGS_RELEASE "${DS2_OPT} -DNDEBUG")
 add_compile_options(-fno-strict-aliasing -ffp-model=strict -fno-char8_t)
 
 set(DS2_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -55,5 +56,6 @@ endif()
 option(DS2_CRASHDUMP "Local debug: minidump + host stack on access violation" OFF)
 if(DS2_CRASHDUMP)
     target_sources(ds2_rex_diagnostic PRIVATE "${DS2_SRC}/app/ds2_crashdump.cpp")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     target_link_options(ds2_rex_diagnostic PRIVATE "LINKER:/MAP:${CMAKE_BINARY_DIR}/bin/ds2.map")
 endif()

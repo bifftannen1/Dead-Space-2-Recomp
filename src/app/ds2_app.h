@@ -14,7 +14,8 @@
 //
 // What the template does NOT do, and this file adds:
 //   1. Defaults gpu_plugin=xenos and mnk_mode=true (the template's gpu_plugin default is
-//      empty = no GPU; the launcher always set REX_MNK_MODE=true, r1_4_launch_v24.py:1007).
+//      empty = no GPU; the launcher always set REX_MNK_MODE=true, r1_4_launch_v24.py:1007),
+//      V-Sync'd presentation and a persistent Vulkan pipeline cache.
 //      Command line, REX_<FLAG> env and ds2.toml still win.
 //   2. Mounts the retail disc image with the SDK's DiscImageDevice at \Device\Cdrom0 and
 //      points game: and d: at it (probe :1693-1712, R1-6). The template only mounts a host
@@ -67,6 +68,17 @@ class Ds2App : public rex::ReXApp {
   void OnPostInitLogging() override {
     DefaultFlag("gpu_plugin", "xenos");
     DefaultFlag("mnk_mode", "true");
+    // The SDK's swapchain prefers IMMEDIATE (no V-Sync), which tears; vsync=true only paces
+    // the guest. Off here, the presenter falls back to MAILBOX or FIFO.
+    DefaultFlag("vulkan_allow_present_mode_immediate", "false");
+    // Keep compiled pipelines between runs (sdk/rexglue_ds2.patch, P4), so a shader only
+    // stutters the first time it is seen. That cvar lives in the GPU plugin, registered after
+    // this hook, so it is seeded through REX_<FLAG>, which the registry reads at registration.
+    // Override it with --p4_vk_pipeline_cache_path or that env var; ds2.toml ranks below env.
+    if (!cache_root().empty() && !std::getenv("REX_P4_VK_PIPELINE_CACHE_PATH")) {
+      auto value = (cache_root() / "vk_pipelines.bin").string();
+      _putenv_s("REX_P4_VK_PIPELINE_CACHE_PATH", value.c_str());
+    }
   }
 
   // Runs after Runtime::Setup (VFS exists) and before LoadXexImage.
