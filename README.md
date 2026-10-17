@@ -47,7 +47,6 @@ the game's own code matches throughout.
 2. Run `DS2Launcher.exe`, select your own Disc 1 and Title Update 2, plus Disc 2 and Severed if available.
 3. Verify files, choose your options and language, then launch.
 
-Already using the October 13 TU2 Alpha? Back up `DS2Launcher.exe` and extract the language hotfix into the folder containing `ds2.exe`. No CMD or PowerShell script is needed. The standalone launcher download also replaces that same file; it needs the existing runtime beside it.
 
 Build from source: [docs/BUILDING.md](docs/BUILDING.md). No game data, title update or DLC is included.
 
