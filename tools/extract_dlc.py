@@ -24,10 +24,12 @@ BLOCK = 0x1000
 
 class Package:
     def __init__(self, path: Path):
-        self.f = open(path, "rb")
-        h = self.f.read(0xA000)
+        with open(path, "rb") as source:
+            h = source.read(0xA000)
         if h[:4] not in (b"LIVE", b"PIRS", b"CON "):
             raise SystemExit(f"EXTRACT_DLC_FAIL not an STFS package (magic {h[:4]!r})")
+        if len(h) < 0x511:  # End of the display-name field read below.
+            raise ValueError('Truncated STFS header')
         self.magic = h[:4].decode().strip()
         hdr_size = struct.unpack(">I", h[0x340:0x344])[0]
         self.content_type = struct.unpack(">I", h[0x344:0x348])[0]
@@ -39,6 +41,10 @@ class Package:
             raise SystemExit("EXTRACT_DLC_FAIL writable (non read-only) STFS volume: not supported")
         self.ft_count = struct.unpack("<H", vd[3:5])[0]
         self.ft_block = int.from_bytes(vd[5:8], "little")
+        self.file_size = Path(path).stat().st_size
+        if self.ft_count == 0 or self.ft_count > self.file_size // BLOCK:
+            raise ValueError('Invalid STFS file-table block count')
+        self.f = open(path, 'rb')
 
     @staticmethod
     def backing(b: int) -> int:
@@ -52,7 +58,10 @@ class Package:
 
     def read_block(self, b: int) -> bytes:
         self.f.seek(self.base + (self.backing(b) << 12))
-        return self.f.read(BLOCK)
+        data = self.f.read(BLOCK)
+        if len(data) != BLOCK:
+            raise ValueError('Truncated STFS data block')
+        return data
 
     def next_block(self, b: int) -> int:
         tbl = self.backing((b // 0xAA) * 0xAA) - 1     # level-0 table right before its group
@@ -60,8 +69,14 @@ class Package:
         return int.from_bytes(self.f.read(0x18)[0x15:0x18], "big")
 
     def blocks(self, start: int, n: int, contiguous: bool):
+        if n < 0 or n > self.file_size // BLOCK:
+            raise ValueError('Invalid STFS block count')
         b = start
+        seen = set()
         for _ in range(n):
+            if b in seen:
+                raise ValueError('Cyclic STFS block chain')
+            seen.add(b)
             yield self.read_block(b)
             b = b + 1 if contiguous else self.next_block(b)
 
@@ -71,6 +86,8 @@ class Package:
         for i in range(0, len(ft), 0x40):
             e = ft[i:i + 0x40]
             n = e[0x28] & 0x3F
+            if n > 0x28:
+                raise ValueError('STFS filename exceeds its 40-byte field')
             if n == 0:
                 out.append(None)
                 continue

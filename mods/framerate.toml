@@ -4,11 +4,11 @@
 name = "framerate"
 version = "0.1.0"
 description = "Target frame time in vblanks (settings.target_vblanks: 1 = 60 FPS, 2 = original 30)"
-enabled = false
+enabled = true
 load_order = 10
 sources = ["framerate/framerate.cpp"]
 hooks = ["EARS::Time::TimeManager::HandleEvents", "Displ_WaitForFrameLock"]
 
 [settings]
 target_vblanks = 1
-log_fps = 0          # 1 = log FPS every 10 s
+log_fps = 1          # 1 = log FPS every 10 s

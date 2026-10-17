@@ -31,6 +31,8 @@
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
 #include <rex/system.h>
+#include <rex/ui/keybinds.h>
+#include "ds2_startup_provenance.h"
 
 #include <algorithm>
 #include <cctype>
@@ -39,6 +41,9 @@
 #include <memory>
 #include <string>
 #include <vector>
+#if defined(DS2_TARGET_TU2)
+#include "ds2_disc_swap.h"
+#endif
 
 REXCVAR_DEFINE_STRING(ds2_iso, "", "DS2",
                       "Disc 1 ISO mounted as game:/d:. Empty: the first *.iso next to the "
@@ -54,6 +59,15 @@ class Ds2App : public rex::ReXApp {
   }
 
  protected:
+  // Same CVar-backed host binding API as ReXApp's F4 overlay (rex_app.cpp:412).
+  // RequestClose follows the normal close-button/Alt+F4 path (window.h:194).
+  void OnCreateDialogs(rex::ui::ImGuiDrawer*) override {
+    rex::ui::RegisterBind("bind_exit_game", "F10", "Exit game (same as Alt+F4)", [this] {
+      REXLOG_INFO("DS2_EXIT_SHORTCUT requested");
+      window()->RequestClose();
+    });
+  }
+
   // game_data_root must be a folder holding default.xex: ConstructRuntime checks
   // game_data_root/default.xex before loading (rex_app.cpp:265-284). tools/build.py stages
   // the user's XEX into <exe>/game/, which is the default here.
@@ -66,29 +80,43 @@ class Ds2App : public rex::ReXApp {
 
   // After ds2.toml is loaded and before SetupPresentation reads gpu_plugin.
   void OnPostInitLogging() override {
+    ds2::provenance::LogFlag("before_ds2_default", "gpu_plugin");
     DefaultFlag("gpu_plugin", "xenos");
+    ds2::provenance::LogFlag("after_ds2_default", "gpu_plugin");
+    ds2::provenance::LogFlag("before_ds2_default", "mnk_mode");
     DefaultFlag("mnk_mode", "true");
+    ds2::provenance::LogFlag("after_ds2_default", "mnk_mode");
     // The SDK's swapchain prefers IMMEDIATE (no V-Sync), which tears; vsync=true only paces
     // the guest. Off here, the presenter falls back to MAILBOX or FIFO.
+    ds2::provenance::LogFlag("before_ds2_default", "vulkan_allow_present_mode_immediate");
     DefaultFlag("vulkan_allow_present_mode_immediate", "false");
+    ds2::provenance::LogFlag("after_ds2_default", "vulkan_allow_present_mode_immediate");
     // Keep compiled pipelines between runs (sdk/rexglue_ds2.patch, P4), so a shader only
     // stutters the first time it is seen. That cvar lives in the GPU plugin, registered after
     // this hook, so it is seeded through REX_<FLAG>, which the registry reads at registration.
     // Override it with --p4_vk_pipeline_cache_path or that env var; ds2.toml ranks below env.
     if (!cache_root().empty() && !std::getenv("REX_P4_VK_PIPELINE_CACHE_PATH")) {
       auto value = (cache_root() / "vk_pipelines.bin").string();
-      _putenv_s("REX_P4_VK_PIPELINE_CACHE_PATH", value.c_str());
+      p4_cache_seeded_ = _putenv_s("REX_P4_VK_PIPELINE_CACHE_PATH", value.c_str()) == 0;
     }
   }
 
   // Runs after Runtime::Setup (VFS exists) and before LoadXexImage.
   void OnLoadXexImage(std::string& xex_image) override {
+    ds2::provenance::Dump(p4_cache_seeded_);
     auto iso = FindIso();
     if (iso.empty()) {
       REXLOG_INFO("ds2: no disc image; using game_data_root {} as the disc",
                   game_data_root().string());
       return;
     }
+#if defined(DS2_TARGET_TU2)
+    try {
+      ds2::disc_swap::Prepare(*runtime(), iso, game_data_root());
+    } catch (const std::exception& error) {
+      Fail(error.what());
+    }
+#else
     auto* vfs = runtime()->file_system();
     constexpr const char* kCdrom = "\\Device\\Cdrom0";
     auto disc = std::make_unique<rex::filesystem::DiscImageDevice>(kCdrom, iso);
@@ -105,35 +133,27 @@ class Ds2App : public rex::ReXApp {
     vfs->RegisterSymbolicLink("d:", kCdrom);
     std::error_code ec;
     const bool tu = std::filesystem::is_regular_file(game_data_root() / "default.xexp", ec);
-#if defined(DS2_TARGET_TU2)
-    // TU2 build (src_tu2/): ReXGlue applies <xex>p next to the loaded XEX and the launcher requires the
-    // XEX under game:, so game: is the host folder (default.xex + default.xexp) and d: stays the disc.
-    if (!tu) {
-      Fail("this is the TU2 build: game\\default.xexp (Title Update #2, disc001) is required next to "
-           "default.xex (docs/BUILDING.md).");
-    }
-    constexpr const char* kTu = "\\Device\\Ds2TitleUpdate";
-    auto tud = std::make_unique<rex::filesystem::HostPathDevice>(kTu, game_data_root(), true);
-    if (!tud->Initialize() || !vfs->RegisterDevice(std::move(tud))) {
-      Fail("Failed to mount title update folder: " + game_data_root().string());
-    }
-    vfs->UnregisterSymbolicLink("game:");
-    vfs->RegisterSymbolicLink("game:", kTu);
-    REXLOG_INFO("ds2: TU2 build: game: = {} (default.xex + default.xexp), d: = disc", game_data_root().string());
-#else
     // Base build (src/): a title-update patch would be applied to the image while the recompiled code
     // stays pre-patch. Refuse it.
     if (tu) {
       Fail("game\\default.xexp found: this build is the unpatched (base) recomp and cannot run a title "
            "update. Remove default.xexp, or build the TU2 target (docs/BUILDING.md).");
     }
-#endif
     REXLOG_INFO("ds2: mounted {} at {} (game:, d:); loading {}", iso.string(), kCdrom, xex_image);
+#endif
   }
 
+#if defined(DS2_TARGET_TU2)
+  void OnPreLaunchModule() override {
+    try { ds2::disc_swap::RegisterImport(*runtime()); }
+    catch (const std::exception& error) { Fail(error.what()); }
+  }
+#endif
+
  private:
+  bool p4_cache_seeded_ = false;
   static void DefaultFlag(const char* name, const char* value) {
-    if (!rex::cvar::GetFlagInfo(name) || rex::cvar::HasNonDefaultValue(name)) return;
+    if (!rex::cvar::GetFlagInfo(name) || rex::cvar::GetFlagSource(name) != rex::cvar::Source::kDefault) return;
     rex::cvar::SetFlagByName(name, value);
   }
 

@@ -2,10 +2,10 @@
 
 # Dead Space 2 Recomp
 
-> **Work in progress.** No game data is included. You need your own retail copy of Dead Space 2 to build and play.
+> **Prerelease playtest — expect bugs.** No game data is included. You need your own retail copy of Dead Space 2 to build and play.
 
 A static recompilation of the Xbox 360 version of Dead Space 2 that runs natively on PC.
-The whole game executable (47,419 functions) is translated to C++ by
+The whole game executable (47,739 functions, Title Update 2) is translated to C++ by
 [ReXGlue](https://github.com/rexglue/rexglue-sdk) and laid out using the game's PDB:
 original source folders, real function names, original file boundaries.
 
@@ -18,18 +18,16 @@ It has two goals:
 Mods are supported through a hook API keyed by those PDB names.
 
 ## Status
-| | Base (retail) | TU2 (Title Update #2) |
-|---|---|---|
-| Functions | 47,419 | 47,739 |
-| Named with their PDB name | 46,316 (97.7%) | 46,105 (96.6%) |
-| Placed in their original source file | 47,171 (99.5%) | 47,429 (99.4%) |
-| Boots and plays | yes | yes (smoke-tested; the code is carried from base) |
+TU2 is now the only supported build; the tooling remains in `tools/`.
+The campaign and Severed DLC have not been fully playtested.
 
 - **TU2 names:** carried from base by proof. 45,912 are *proven* and 885 *probable*. The probable ones need an opt-in before a mod can hook them.
-- **Disc 2:** with Title Update #2 it patches to an image byte-identical to Disc 1, so the TU2 build runs it too. Switching discs mid-game isn't supported yet ([TODO](docs/TODO.md)).
+- **Disc 2:** with Title Update #2 it patches to an image byte-identical to Disc 1, so the TU2 build runs it too. The launcher supplies both discs for automatic switching; full campaign validation remains pending.
 - **DLC, *Dead Space 2: Severed*:** working, but **not fully playtested**. The package installs with `tools/extract_dlc.py` and the game mounts it. Severed has been smoke-tested, not played through.
 - **Multiplayer and Xbox Live features** (online play, leaderboards, achievements syncing, marketplace) are **not tested yet**.
-- **Launcher:** coming soon. It will be a single `DS2Launcher.exe` that takes your discs, the title update and the DLC, checks them and starts the game.
+- **Launcher:** included in the [playtest release](https://github.com/bifftannen1/Dead-Space-2-Recomp/releases/tag/tu2-playtest-20261017), with file verification, DLC setup, display options and language selection.
+- **Languages:** English and French voices; Spanish text/subtitles with English voices on the supported World (En,Fr,Es) discs.
+- **Feedback:** report bugs through [Issues](https://github.com/bifftannen1/Dead-Space-2-Recomp/issues), including your chapter/DLC, GPU and latest log. First-run shader compilation may cause stutter; restart and check whether it improves.
 
 ## Sources
 | | |
@@ -45,29 +43,20 @@ The prototype is a near-exact match for retail: of 22,976 functions compared by 
 the game's own code matches throughout.
 
 ## Quick start
-You need your own Dead Space 2 Disc 1 image (the XEX must match sha256 `928597dd…3408`).
+1. Download and extract **DS2-TU2-Playtest-20261017.zip** from the [release](https://github.com/bifftannen1/Dead-Space-2-Recomp/releases/tag/tu2-playtest-20261017).
+2. Run `DS2Launcher.exe`, select your own Disc 1 and Title Update 2, plus Disc 2 and Severed if available.
+3. Verify files, choose your options and language, then launch.
 
-**Recommended: build with Title Update #2** (your own `disc001\default.xexp`):
-```
-python tools\build.py --target tu2 --iso "D:\isos\Dead Space 2 (Disc 1).iso" --xexp "D:\tu2\disc001\default.xexp"
-build\bin\ds2.exe
-```
-Without the title update (the retail build):
-```
-python tools\build.py --iso "D:\isos\Dead Space 2 (Disc 1).iso"
-build\bin\ds2.exe
-```
-DLC: `python tools\extract_dlc.py <package> --user-root <folder>`, then `ds2.exe --user_data_root=<folder>`.
+Already using the October 13 TU2 Alpha? Back up `DS2Launcher.exe` and extract the language hotfix into the folder containing `ds2.exe`. No CMD or PowerShell script is needed. The standalone launcher download also replaces that same file; it needs the existing runtime beside it.
 
-Requirements and options: [docs/BUILDING.md](docs/BUILDING.md).
+Build from source: [docs/BUILDING.md](docs/BUILDING.md). No game data, title update or DLC is included.
 
 ## Layout
 | Path | What |
 |---|---|
-| `src/DeadSpace`, `EA`, `EARS`, `Havok`, `XDK`, `BFX` | Recompiled game code, one file per original source file |
-| `src_tu2/` | The same tree for Title Update #2 (`--target tu2`); `src/app` and `src/modapi` are shared |
-| `src/_units/` | 157 build units matching the codegen translation units |
-| `src/symbols.tsv`, `src/ds2_names.h` | Address → PDB name map |
+| `src_tu2/` | Recompiled Title Update #2 game code; `src/app` and `src/modapi` are shared |
+| `src_tu2/_units/` | 157 build units matching the codegen translation units |
+| `src_tu2/symbols.tsv`, `src_tu2/ds2_names.h` | Address → PDB name map |
 | `src/app/` | Host app (`ds2.exe`) |
 | `src/modapi/`, `mods/` | Mod API and example mods |
 | `sdk/` | Pinned ReXGlue commit and the DS2 patch |

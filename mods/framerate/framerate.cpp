@@ -11,6 +11,7 @@
 #include "ds2_modapi.h"
 
 #include <rex/logging.h>
+#include "../../../../src/app/ds2_cadence_window.h"
 
 #include <bit>
 #include <chrono>
@@ -33,13 +34,15 @@ const TimeAddrs* FindBuild(ds2::mod::Call& c) {
 }
 
 // settings.log_fps: every 10 s, log the host frame rate seen by this once-per-frame hook.
-void LogFps() {
+void LogFps(double deadline_ms) {
   using clock = std::chrono::steady_clock;
   static clock::time_point last{}, window{};
   static int frames = 0, over_40 = 0, over_100 = 0;
+  static ds2::provenance::CadenceWindow<> cadence;
   const auto now = clock::now();
   if (last.time_since_epoch().count()) {
     const double ms = std::chrono::duration<double, std::milli>(now - last).count();
+    cadence.Add(ms, deadline_ms);
     ++frames;
     over_40 += ms > 40.0;
     over_100 += ms > 100.0;
@@ -51,6 +54,11 @@ void LogFps() {
   if (span >= 10.0) {
     REXLOG_INFO("framerate-mod: {:.1f} FPS over {:.1f} s, frames >40 ms: {}, >100 ms: {}",
                 frames / span, span, over_40, over_100);
+    const auto percentile = cadence.Percentiles();
+    REXLOG_INFO("DS2_CADENCE kind=guest_HandleEvents_hook samples={} intervals={} overflow={} span_s={:.6f} p50_ms={:.6f} p95_ms={:.6f} p99_ms={:.6f} deadline_ms={:.6f} deadline_misses={} unknown_deadline={} percentile=nearest_rank",
+                cadence.count, cadence.intervals, cadence.overflow, span, percentile[0],
+                percentile[1], percentile[2], deadline_ms, cadence.misses, cadence.unknown_deadline);
+    cadence = {};
     frames = over_40 = over_100 = 0;
     window = now;
   }
@@ -58,13 +66,15 @@ void LogFps() {
 
 void BeforeTimeUpdate(ds2::mod::Call& c) {
   static const bool log_fps = DS2_SETTING_NUMBER("log_fps", 0) != 0;
-  if (log_fps) LogFps();
+  static double cadence_deadline_ms = 0;
+  if (log_fps) LogFps(cadence_deadline_ms);
   static const int vblanks = int(DS2_SETTING_NUMBER("target_vblanks", 1));
   if (vblanks < 1 || vblanks > 4) return;
   static const TimeAddrs* build = nullptr;
   if (!build && !(build = FindBuild(c))) return;  // TV system not initialised yet
   const uint32_t kTargetFrameMs = build->target_frame_ms;
   const float want = c.load_f32(build->one_vblank_ms) * float(vblanks);
+  cadence_deadline_ms = want;  // Actual guest vblank value and selected mod target.
   if (c.load_f32(kTargetFrameMs) == want) return;
   static bool logged = false;
   if (!logged) {

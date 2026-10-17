@@ -3,11 +3,11 @@
 name = "fov"
 version = "1.0.0"
 description = "Scale the field of view (settings.fov_scale)"
-enabled = true
+enabled = false
 load_order = 10
 sources = ["fov/fov.cpp"]
 hooks = ["RenderContext::RC_RebuildAndApplyProjectionMatrix"]
 
 [settings]
-fov_scale = 1.25   # 1.0 = unchanged; > 1 wider, < 1 narrower
+fov_scale = 1.0   # 1.0 = unchanged; > 1 wider, < 1 narrower
 log_calls = 5      # log the first N projections (then powers of two)

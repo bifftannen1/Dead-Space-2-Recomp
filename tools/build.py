@@ -175,13 +175,10 @@ XEXP_SHA256 = "8d386d37e8f71937b9d9c4b34bdbf85240101479c8aaece1002d94e7cdc01ec2"
 
 
 def step_xexp(bindir: Path, target: str, xexp: str | None) -> None:
-    """tu2: stage the pinned TU2 patch next to default.xex. base: remove any staged patch (ds2.exe
-    refuses to run a base build with one)."""
-    dst = bindir / "game" / "default.xexp"
+    """Stage the source-pinned Title Update 2 patch."""
     if target != "tu2":
-        if dst.exists():
-            os.chmod(dst, 0o666); dst.unlink(); print("xexp: removed", dst, "(base target)")
-        return
+        fail("Only TU2 is supported")
+    dst = bindir / "game" / "default.xexp"
     if not xexp:
         fail("--target tu2 needs --xexp <Title Update #2 disc001/default.xexp>")
     got = sha256(Path(xexp))
@@ -192,7 +189,7 @@ def step_xexp(bindir: Path, target: str, xexp: str | None) -> None:
     print("xexp: staged", dst, got)
 
 
-def step_app(inst: Path, env: dict, jobs: int, bt: Path, mods: bool, target: str = "base") -> Path:
+def step_app(inst: Path, env: dict, jobs: int, bt: Path, mods: bool, target: str = "tu2") -> Path:
     bindir = bt / "bin"
     run(["cmake", "-S", REPO, "-B", bt, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++", "-DCMAKE_CXX_FLAGS=-march=x86-64-v2",
@@ -236,8 +233,8 @@ def main() -> int:
     ap.add_argument("--build-dir", default=str(REPO / "build"))
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 8)
     ap.add_argument("--mods", action="store_true", help="DS2_MODS=ON (mod API + mods/)")
-    ap.add_argument("--target", choices=("base", "tu2"), default="base",
-                    help="base: src/ (retail XEX); tu2: src_tu2/ (with Title Update #2, needs --xexp)")
+    ap.add_argument("--target", choices=("tu2",), default="tu2",
+                    help="TU2 only: src_tu2/ (requires --xexp)")
     ap.add_argument("--xexp", help="Title Update #2 disc001/default.xexp (required for --target tu2)")
     a = ap.parse_args()
     if a.target == "tu2" and not a.xexp:

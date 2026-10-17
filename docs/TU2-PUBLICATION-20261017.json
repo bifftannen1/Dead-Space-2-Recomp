@@ -1,0 +1,20 @@
+{
+  "upstream_head": "cc496dd02343e3469665b05a17ce19423ef0f0d4",
+  "removed_base_source_files": 4560,
+  "retained_tool_files": 63,
+  "modified_existing_tools": [
+    "tools/build.py",
+    "tools/extract_dlc.py",
+    "tools/extract_xex.py"
+  ],
+  "launcher_sha256": "8a47304fe5862bf897b0ff8e45800b99fc8caa310babdbdbaa0411c02cb935b6",
+  "package_sha256": "687acb7f82c0ea6f68cc7a6105819c0e127b4a31616e3434c50a98f800f84295",
+  "runtime_rebuilt": false,
+  "verification": {
+    "launcher_tests_passed": 18,
+    "runtime_manifest_hashes_match": true,
+    "launcher_matches_tested_binary": true,
+    "tu2_source_content_unchanged_ignoring_line_endings": true,
+    "full_campaign_and_dlc_tested": false
+  }
+}

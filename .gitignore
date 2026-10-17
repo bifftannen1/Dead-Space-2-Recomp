@@ -30,3 +30,8 @@ cache/
 ds2.toml
 *.log
 /build_tu2/
+
+/dist/
+/build-launcher/
+*.spec
+/build-temp/

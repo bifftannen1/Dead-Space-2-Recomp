@@ -1,0 +1,14 @@
+# Frame rate: the engine's target frame time in vblanks (2 = the game's 30 FPS).
+# Experimental: whether game logic, physics, animation and cutscenes hold up at 1 is untested.
+[mod]
+name = "framerate"
+version = "0.1.0"
+description = "Target frame time in vblanks (settings.target_vblanks: 1 = 60 FPS, 2 = original 30)"
+enabled = true
+load_order = 10
+sources = ["framerate/framerate.cpp"]
+hooks = ["EARS::Time::TimeManager::HandleEvents", "Displ_WaitForFrameLock"]
+
+[settings]
+target_vblanks = 1
+log_fps = 1          # 1 = log FPS every 10 s
