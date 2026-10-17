@@ -89,3 +89,6 @@ to `CMAKE_CXX_FLAGS` when the checkouts live at different paths.
 
 ## Launcher
 Install PyInstaller in your Python build environment, then run `python tools/build_launcher.py`. The frozen launcher needs the TU2 runtime and runtime-manifest.json beside it. Download the playtest package for the existing runtime.
+
+## Windows installer
+Place the published portable ZIP in `dist/`, then run `python tools/build_installer.py "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"`. The builder verifies the input ZIP hash. `installer/DS2.iss` defines the per-user install, shortcuts and uninstaller. Test with `python tools/test_installer.py install`, then `python tools/test_installer.py uninstall` in a disposable test environment.

@@ -1,0 +1,13 @@
+{
+  "installed_files_verified": 57,
+  "reinstall_passed": true,
+  "user_file_preserved_on_reinstall": true,
+  "uninstall_passed": true,
+  "user_file_preserved_on_uninstall": true,
+  "installer_sha256": "8faa90abff45bde8552111dea2bff044559c7ed20ae60858643561cdc8108409",
+  "shortcut_target_verified": true,
+  "shortcut_removed_on_uninstall": true,
+  "launcher_window_detected": true,
+  "visual_capture": "unverified: desktop capture tool failed",
+  "gameplay_retested": false
+}

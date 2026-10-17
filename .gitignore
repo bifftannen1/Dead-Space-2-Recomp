@@ -35,3 +35,4 @@ ds2.toml
 /build-launcher/
 *.spec
 /build-temp/
+/build-installer/

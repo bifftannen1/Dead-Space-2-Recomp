@@ -43,7 +43,7 @@ The prototype is a near-exact match for retail: of 22,976 functions compared by 
 the game's own code matches throughout.
 
 ## Quick start
-1. Download and extract **DS2-TU2-Playtest-20261017.zip** from the [release](https://github.com/bifftannen1/Dead-Space-2-Recomp/releases/tag/tu2-playtest-20261017).
+1. Download **DS2-TU2-Playtest-20261017-Setup.exe** (installer), or extract **DS2-TU2-Playtest-20261017.zip** (portable), from the [release](https://github.com/bifftannen1/Dead-Space-2-Recomp/releases/tag/tu2-playtest-20261017).
 2. Run `DS2Launcher.exe`, select your own Disc 1 and Title Update 2, plus Disc 2 and Severed if available.
 3. Verify files, choose your options and language, then launch.
 
