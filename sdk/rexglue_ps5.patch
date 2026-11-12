@@ -1,0 +1,4559 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9b3cdf56..13f6998a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -116,7 +116,9 @@ endfunction()
+ 
+ if(NOT WIN32)
+     # Use appropriate code model based on architecture
+-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64" AND NOT APPLE)
++    # [ps5 port] PS5: the default (small) code model, as the PS5 linker script
++    # and signer expect.
++    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64" AND NOT APPLE AND NOT PS5)
+         # Large code model on Linux x86_64 for linking with very large recompiled executables (35MB+).
+         # macOS uses small: the ld64 linker on macOS 15+ rejects text relocations produced
+         # by -mcmodel=large, and macOS maps binaries in the low address space so ±2GB is sufficient.
+@@ -167,6 +169,12 @@ elseif(UNIX AND NOT APPLE)
+         set(REX_PLATFORM "linux-${REX_TARGET_PROCESSOR}")
+     endif()
+     add_compile_definitions(REX_PLATFORM_LINUX=1)
++    if(PS5)
++        # [ps5 port] PS5 homebrew: FreeBSD-based, shares the POSIX paths.
++        set(REX_PLATFORM "ps5-amd64")
++        add_compile_definitions(REX_PLATFORM_PS5=1)
++        add_compile_options("SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/rex/ps5_compat.h")
++    endif()
+ elseif(APPLE)
+     if(REX_TARGET_PROCESSOR MATCHES "AMD64|x86_64")
+         set(REX_PLATFORM "mac-amd64")
+diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
+index 41e6dce3..fae968c2 100644
+--- a/cmake/rexglue_helpers.cmake
++++ b/cmake/rexglue_helpers.cmake
+@@ -47,7 +47,9 @@ endfunction()
+ function(rexglue_apply_target_settings target_name)
+     if(UNIX AND NOT APPLE)
+         # Large executable support
+-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
++        if(PS5)
++            # [ps5 port] default code model (see the top-level CMakeLists.txt).
++        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+             target_link_options(${target_name} PRIVATE -Wl,--no-relax)
+             target_compile_options(${target_name} PRIVATE -mcmodel=large)
+         elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+diff --git a/include/rex/audio/ps5/ps5_audio_driver.h b/include/rex/audio/ps5/ps5_audio_driver.h
+new file mode 100644
+index 00000000..7787345b
+--- /dev/null
++++ b/include/rex/audio/ps5/ps5_audio_driver.h
+@@ -0,0 +1,45 @@
++#pragma once
++/**
++ * [ps5 port] Audio out through sceAudioOut: the Xbox 360's 48 kHz frames of
++ * 256 samples x 6 channels, folded to stereo 16-bit (the port format the
++ * UnleashedRecomp and GTA IV PS5 ports verified), pushed by a thread of its own.
++ */
++#include <atomic>
++#include <mutex>
++#include <queue>
++#include <stack>
++#include <thread>
++
++#include <rex/audio/audio_driver.h>
++#include <rex/thread.h>
++
++namespace rex::audio::ps5 {
++
++class Ps5AudioDriver : public AudioDriver {
++ public:
++  Ps5AudioDriver(memory::Memory* memory, rex::thread::Semaphore* semaphore);
++  ~Ps5AudioDriver() override;
++
++  bool Initialize();
++  void SubmitFrame(uint32_t frame_ptr) override;
++  void Shutdown();
++
++ private:
++  void OutputThread();
++
++  static constexpr uint32_t kFrequency = 48000;
++  static constexpr uint32_t kChannels = 6;
++  static constexpr uint32_t kChannelSamples = 256;
++  static constexpr uint32_t kFrameSamples = kChannels * kChannelSamples;
++
++  rex::thread::Semaphore* semaphore_ = nullptr;
++  int32_t port_ = -1;
++  std::thread thread_;
++  std::atomic<bool> running_{false};
++
++  std::queue<float*> frames_queued_;
++  std::stack<float*> frames_unused_;
++  std::mutex frames_mutex_;
++};
++
++}  // namespace rex::audio::ps5
+diff --git a/include/rex/chrono/chrono.h b/include/rex/chrono/chrono.h
+index 3a544323..9b823fd6 100644
+--- a/include/rex/chrono/chrono.h
++++ b/include/rex/chrono/chrono.h
+@@ -116,8 +116,9 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
+ 
+ namespace std::chrono {
+ 
+-#if defined(__APPLE__) || defined(__NX__)
+-// Apple libc++ (and NX libc++ 13) does not expose clock_time_conversion or clock_cast.
++#if defined(__APPLE__) || defined(__NX__) || defined(__PROSPERO__)
++// Apple libc++ (and NX libc++ 13, and the PS5's libc++ 18) does not expose
++// clock_time_conversion or clock_cast.
+ template <class, class>
+ struct clock_time_conversion {};
+ 
+diff --git a/include/rex/filesystem/devices/disc_image_device.h b/include/rex/filesystem/devices/disc_image_device.h
+index 21832129..fc1fe153 100644
+--- a/include/rex/filesystem/devices/disc_image_device.h
++++ b/include/rex/filesystem/devices/disc_image_device.h
+@@ -16,9 +16,13 @@
+ 
+ #include <rex/filesystem/device.h>
+ #include <rex/memory/mapped_memory.h>
++#include <rex/platform.h>
+ 
+ namespace rex::filesystem {
+ 
++namespace direct {
++class Reader;
++}
+ class DiscImageEntry;
+ 
+ class DiscImageDevice : public Device {
+@@ -42,12 +46,17 @@ class DiscImageDevice : public Device {
+   uint64_t total_file_size() const { return total_file_size_; }
+   const DiscInfo& disc_info() const { return disc_info_; }
+ 
++  // Copies `length` bytes at `offset` in the image (false past its end or on a
++  // read error). [ps5 port] The only way to the image's bytes on the PS5,
++  // where it is read with pread and never mapped.
++  bool ReadAt(size_t offset, void* out, size_t length) const;
++
+   const std::string& name() const override { return name_; }
+   uint32_t attributes() const override { return 0; }
+   uint32_t component_name_max_length() const override { return 255; }
+ 
+   uint32_t total_allocation_units() const override {
+-    return uint32_t(mmap_->size() / sectors_per_allocation_unit() / bytes_per_sector());
++    return uint32_t(host_size_ / sectors_per_allocation_unit() / bytes_per_sector());
+   }
+   uint32_t available_allocation_units() const override { return 0; }
+   uint32_t sectors_per_allocation_unit() const override { return 1; }
+@@ -66,6 +75,10 @@ class DiscImageDevice : public Device {
+   std::filesystem::path host_path_;
+   std::unique_ptr<Entry> root_entry_;
+   std::unique_ptr<memory::MappedMemory> mmap_;
++#if REX_PLATFORM_PS5
++  std::unique_ptr<direct::Reader> reader_;  // [ps5 port] the image, read past the cache (never mapped)
++#endif
++  size_t host_size_ = 0;
+   DiscInfo disc_info_{};
+   uint64_t file_count_ = 0;
+   uint64_t total_file_size_ = 0;
+diff --git a/include/rex/filesystem/direct_io.h b/include/rex/filesystem/direct_io.h
+new file mode 100644
+index 00000000..87e2fd2e
+--- /dev/null
++++ b/include/rex/filesystem/direct_io.h
+@@ -0,0 +1,182 @@
++/**
++ * [ps5 port] Reading past the system's file cache (O_DIRECT).
++ *
++ * On the PS5 everything read or written through the file cache stays in
++ * memory, and while an app runs the console has little to spare: after a
++ * couple of GB the cache is full and every read and write waits on the
++ * console freeing memory, which it does slowly (an install fell from 85 MB/s
++ * to a few). Games read past the cache, and so do these.
++ *
++ * A direct read is widened to 64 KiB-aligned bounds into an aligned buffer
++ * (kept for the next read) and copied out. Where the kernel refuses a direct
++ * transfer, the file goes on through the cache.
++ */
++#pragma once
++
++#if !defined(_WIN32)
++
++#include <algorithm>
++#include <atomic>
++#include <cerrno>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <vector>
++
++#include <fcntl.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <rex/platform.h>
++
++namespace rex::filesystem::direct {
++
++constexpr size_t kAlign = size_t(64) << 10;
++
++// Past the cache only on the PS5 (elsewhere the cache is the fast path).
++#if REX_PLATFORM_PS5
++constexpr bool kEnabled = true;
++#else
++constexpr bool kEnabled = false;
++#endif
++
++inline uint8_t* AlignedAlloc(size_t bytes) {
++  void* p = nullptr;
++  return posix_memalign(&p, kAlign, std::max<size_t>(bytes, kAlign)) == 0 ? static_cast<uint8_t*>(p)
++                                                                         : nullptr;
++}
++
++// From here on, `fd` goes through the cache.
++inline void TurnOff(int fd) {
++  const int flags = fcntl(fd, F_GETFL);
++  if (flags != -1) fcntl(fd, F_SETFL, flags & ~O_DIRECT);
++}
++
++inline uint64_t AlignDown(uint64_t v) { return v & ~uint64_t(kAlign - 1); }
++inline uint64_t AlignUp(uint64_t v) { return (v + kAlign - 1) & ~uint64_t(kAlign - 1); }
++
++// A file read at any offset, from several threads at once.
++class Reader {
++ public:
++  Reader() = default;
++  Reader(const Reader&) = delete;
++  Reader& operator=(const Reader&) = delete;
++  ~Reader() {
++    Close();
++    for (auto& buffer : free_) std::free(buffer.data);
++  }
++
++  bool Open(const char* path) {
++    Close();
++    if (kEnabled) {
++      fd_ = ::open(path, O_RDONLY | O_DIRECT);
++      direct_ = fd_ >= 0;
++    }
++    if (fd_ < 0) fd_ = ::open(path, O_RDONLY);
++    if (fd_ < 0) return false;
++    struct stat st {};
++    if (::fstat(fd_, &st) != 0) {
++      Close();
++      return false;
++    }
++    size_ = uint64_t(st.st_size);
++    return true;
++  }
++
++  void Close() {
++    if (fd_ >= 0) ::close(fd_);
++    fd_ = -1;
++  }
++
++  int fd() const { return fd_; }
++  uint64_t size() const { return size_; }
++  bool direct() const { return direct_.load(std::memory_order_relaxed); }
++
++  // Exactly `length` bytes at `offset` (false past the end or on an error).
++  bool ReadAt(uint64_t offset, void* out, size_t length) {
++    if (length == 0) return true;
++    if (offset > size_ || length > size_ - offset) return false;
++    if (direct_.load(std::memory_order_relaxed)) {
++      const uint64_t start = AlignDown(offset), end = AlignUp(offset + length);
++      const size_t window = size_t(end - start), need = size_t(offset + length - start);
++      Buffer buffer = Take(window);
++      if (buffer.data) {
++        size_t got = 0;
++        bool refused = false;
++        while (got < need) {
++          const ssize_t n = ::pread(fd_, buffer.data + got, window - got, off_t(start + got));
++          if (n < 0 && errno == EINTR) continue;
++          if (n < 0 && errno == EINVAL) {
++            refused = true;
++            break;
++          }
++          if (n <= 0) break;
++          got += size_t(n);
++        }
++        const bool ok = got >= need;
++        if (ok) std::memcpy(out, buffer.data + (offset - start), length);
++        Give(buffer);
++        if (ok) return true;
++        if (!refused) return false;
++        // The kernel won't read this file directly: through the cache from now on.
++        if (direct_.exchange(false)) TurnOff(fd_);
++      }
++    }
++    auto* p = static_cast<uint8_t*>(out);
++    while (length) {
++      const ssize_t n = ::pread(fd_, p, length, off_t(offset));
++      if (n < 0 && errno == EINTR) continue;
++      if (n <= 0) return false;
++      p += n, offset += uint64_t(n), length -= size_t(n);
++    }
++    return true;
++  }
++
++ private:
++  struct Buffer {
++    uint8_t* data = nullptr;
++    size_t size = 0;
++  };
++
++  Buffer Take(size_t bytes) {
++    {
++      std::lock_guard lock(mutex_);
++      for (size_t i = 0; i < free_.size(); ++i) {
++        if (free_[i].size >= bytes) {
++          const Buffer buffer = free_[i];
++          free_.erase(free_.begin() + std::ptrdiff_t(i));
++          return buffer;
++        }
++      }
++    }
++    const size_t size = (bytes + (size_t(1) << 20) - 1) & ~((size_t(1) << 20) - 1);  // (1 MiB steps)
++    Buffer buffer{AlignedAlloc(size), size};
++    if (!buffer.data) buffer.size = 0;
++    return buffer;
++  }
++
++  void Give(Buffer buffer) {
++    if (!buffer.data) return;
++    std::lock_guard lock(mutex_);
++    if (free_.size() < 8) {
++      free_.push_back(buffer);
++      return;
++    }
++    // (full: the smallest goes)
++    auto smallest = std::min_element(free_.begin(), free_.end(),
++                                     [](const Buffer& a, const Buffer& b) { return a.size < b.size; });
++    if (smallest->size < buffer.size) std::swap(*smallest, buffer);
++    std::free(buffer.data);
++  }
++
++  int fd_ = -1;
++  uint64_t size_ = 0;
++  std::atomic<bool> direct_{false};
++  std::mutex mutex_;
++  std::vector<Buffer> free_;
++};
++
++}  // namespace rex::filesystem::direct
++
++#endif  // !_WIN32
+diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+index d26cd4fb..fffad831 100644
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -220,15 +220,15 @@ class TextureCache {
+     static constexpr uint32_t kOutdatedBitMips = UINT32_C(1) << 1;
+     uint32_t outdated_mask() const { return outdated_mask_.load(std::memory_order_acquire); }
+ 
+-    bool base_outdated(const std::unique_lock<std::recursive_mutex>& global_lock) const {
++    bool base_outdated(const rex::thread::global_lock_t& global_lock) const {
+       return base_outdated_;
+     }
+-    bool mips_outdated(const std::unique_lock<std::recursive_mutex>& global_lock) const {
++    bool mips_outdated(const rex::thread::global_lock_t& global_lock) const {
+       return mips_outdated_;
+     }
+-    void MakeUpToDateAndWatch(const std::unique_lock<std::recursive_mutex>& global_lock);
++    void MakeUpToDateAndWatch(const rex::thread::global_lock_t& global_lock);
+ 
+-    void WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock, bool is_mip);
++    void WatchCallback(const rex::thread::global_lock_t& global_lock, bool is_mip);
+ 
+     // For LRU caching - updates the last usage frame and moves the texture to
+     // the end of the usage queue. Must be called any time the texture is
+@@ -565,7 +565,7 @@ class TextureCache {
+   void UpdateTexturesTotalHostMemoryUsage(uint64_t add, uint64_t subtract);
+ 
+   // Shared memory callback for texture data invalidation.
+-  static void WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock,
++  static void WatchCallback(const rex::thread::global_lock_t& global_lock,
+                             void* context, void* data, uint64_t argument, bool invalidated_by_gpu);
+ 
+   // Checks if there are any pages that contain scaled resolve data within the
+@@ -574,9 +574,9 @@ class TextureCache {
+   // Global shared memory invalidation callback for invalidating scaled resolved
+   // texture data.
+   static void ScaledResolveGlobalWatchCallbackThunk(
+-      const std::unique_lock<std::recursive_mutex>& global_lock, void* context,
++      const rex::thread::global_lock_t& global_lock, void* context,
+       uint32_t address_first, uint32_t address_last, bool invalidated_by_gpu);
+-  void ScaledResolveGlobalWatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock,
++  void ScaledResolveGlobalWatchCallback(const rex::thread::global_lock_t& global_lock,
+                                         uint32_t address_first, uint32_t address_last,
+                                         bool invalidated_by_gpu);
+ 
+diff --git a/include/rex/graphics/shared_memory.h b/include/rex/graphics/shared_memory.h
+index 4d85a2b5..d43cdee7 100644
+--- a/include/rex/graphics/shared_memory.h
++++ b/include/rex/graphics/shared_memory.h
+@@ -34,7 +34,7 @@ class SharedMemory {
+   void SetSystemPageBlocksValidWithGpuDataWritten();
+   void InvalidateAllPages();
+ 
+-  typedef void (*GlobalWatchCallback)(const std::unique_lock<std::recursive_mutex>& global_lock,
++  typedef void (*GlobalWatchCallback)(const rex::thread::global_lock_t& global_lock,
+                                       void* context, uint32_t address_first, uint32_t address_last,
+                                       bool invalidated_by_gpu);
+   typedef void* GlobalWatchHandle;
+@@ -48,7 +48,7 @@ class SharedMemory {
+   // The callback is called within the global critical region.
+   GlobalWatchHandle RegisterGlobalWatch(GlobalWatchCallback callback, void* callback_context);
+   void UnregisterGlobalWatch(GlobalWatchHandle handle);
+-  typedef void (*WatchCallback)(const std::unique_lock<std::recursive_mutex>& global_lock,
++  typedef void (*WatchCallback)(const rex::thread::global_lock_t& global_lock,
+                                 void* context, void* data, uint64_t argument,
+                                 bool invalidated_by_gpu);
+   typedef void* WatchHandle;
+diff --git a/include/rex/input/ps5/ps5_input_driver.h b/include/rex/input/ps5/ps5_input_driver.h
+new file mode 100644
+index 00000000..870db03b
+--- /dev/null
++++ b/include/rex/input/ps5/ps5_input_driver.h
+@@ -0,0 +1,58 @@
++#pragma once
++/**
++ * [ps5 port] DualSense controllers through scePad: one device per logged-in
++ * PS5 user that has a controller (the first is Xbox 360 pad 1).
++ *
++ * Mapping (Xbox 360 <- DualSense): A <- Cross, B <- Circle, X <- Square,
++ * Y <- Triangle, LB/RB <- L1/R1, LT/RT <- L2/R2 (analog), START <- Options,
++ * BACK <- touchpad click, stick clicks <- L3/R3, d-pad <- d-pad.
++ */
++#include <array>
++#include <cstdint>
++#include <memory>
++#include <mutex>
++#include <vector>
++
++#include <rex/input/input_driver.h>
++
++namespace rex::input::ps5 {
++
++class Ps5InputDriver final : public InputDriver {
++ public:
++  Ps5InputDriver();
++  ~Ps5InputDriver() override;
++
++  X_STATUS Setup() override;
++  void EnumerateDevices(std::vector<DeviceInfo>& out) override;
++  X_RESULT GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) override;
++  X_RESULT GetDeviceCapabilities(DeviceId id, uint32_t flags,
++                                 X_INPUT_CAPABILITIES* out_caps) override;
++  X_RESULT SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) override;
++  X_RESULT GetDeviceKeystroke(DeviceId id, uint32_t flags,
++                              X_INPUT_KEYSTROKE* out_keystroke) override;
++
++ private:
++  static constexpr size_t kMaxPads = 4;
++  struct Pad {
++    int32_t user_id = -1;
++    int32_t handle = -1;
++    DeviceId id = DeviceId::kInvalid;
++    uint32_t packet_number = 0;
++    X_INPUT_GAMEPAD last_gamepad{};
++    uint32_t keystroke_buttons = 0;  // the buttons the keystroke events last reported
++  };
++  Pad* PadFor(DeviceId id);
++  // Opens a pad for every logged-in user that hasn't one yet (users log in and
++  // controllers connect while the game runs). At most twice a second.
++  void RefreshPads();
++  X_RESULT ReadState(Pad& pad, bool active, X_INPUT_STATE* out_state);
++
++  std::mutex mutex_;
++  std::array<Pad, kMaxPads> pads_{};
++  uint64_t last_refresh_ms_ = 0;
++  uint64_t next_id_ = 1;
++};
++
++std::unique_ptr<InputDriver> CreatePs5InputDriver();
++
++}  // namespace rex::input::ps5
+diff --git a/include/rex/platform.h b/include/rex/platform.h
+index 577a92a0..2ece8d50 100644
+--- a/include/rex/platform.h
++++ b/include/rex/platform.h
+@@ -41,6 +41,11 @@
+ #elif defined(__NX__) || defined(__HORIZON__)
+ // N1 (2026-10-06): Nintendo Switch / Horizon (official NX SDK, nx-clang).
+ #define REX_PLATFORM_NX 1
++#elif defined(__PROSPERO__)
++// [ps5 port] PlayStation 5 homebrew (FreeBSD-based). Shares the POSIX paths
++// with Linux; PS5 differences are under REX_PLATFORM_PS5.
++#define REX_PLATFORM_PS5 1
++#define REX_PLATFORM_LINUX 1
+ #else
+ #error Unsupported target OS.
+ #endif
+@@ -65,6 +70,9 @@
+ #ifndef REX_PLATFORM_NX
+ #define REX_PLATFORM_NX 0
+ #endif
++#ifndef REX_PLATFORM_PS5
++#define REX_PLATFORM_PS5 0
++#endif
+ 
+ #if defined(__clang__)
+ #define REX_COMPILER_CLANG 1
+diff --git a/include/rex/ppc/function.h b/include/rex/ppc/function.h
+index 611a52f4..38789ebd 100644
+--- a/include/rex/ppc/function.h
++++ b/include/rex/ppc/function.h
+@@ -419,8 +419,17 @@ __attribute__((noinline)) void HostToGuestFunction(PPCContext& ctx, uint8_t* bas
+ 
+     if constexpr (std::is_pointer<ret_t>()) {
+       if (v != nullptr) {
++#if REX_PLATFORM_PS5
++        // [ps5 port] A host pointer into the 0xE0000000 range sits 4 KB further
++        // in host memory than its guest address (PhysicalHostOffset): take it
++        // off again.
++        uint64_t guest_offset = reinterpret_cast<size_t>(v) - reinterpret_cast<size_t>(base);
++        if (guest_offset >= 0xE0001000ull && guest_offset < 0x100001000ull) guest_offset -= 0x1000;
++        ctx.r3.u64 = static_cast<uint32_t>(guest_offset);
++#else
+         ctx.r3.u64 =
+             static_cast<uint32_t>(reinterpret_cast<size_t>(v) - reinterpret_cast<size_t>(base));
++#endif
+       } else {
+         ctx.r3.u64 = 0;
+       }
+diff --git a/include/rex/ps5_compat.h b/include/rex/ps5_compat.h
+new file mode 100644
+index 00000000..85c3c3ca
+--- /dev/null
++++ b/include/rex/ps5_compat.h
+@@ -0,0 +1,33 @@
++/**
++ * @file        rex/ps5_compat.h
++ * @brief       [ps5 port] Linux names the POSIX code uses, mapped to the PS5's
++ *              FreeBSD equivalents. Force-included on PS5 builds
++ *              (-include rex/ps5_compat.h); a no-op everywhere else.
++ *
++ * Macros only, no includes: it is force-included ahead of the precompiled
++ * headers, and declaring anything here (even via <stdio.h>) would declare
++ * clang's __va_list_tag twice and break va_list in PCH'd files.
++ */
++#pragma once
++
++#if defined(__PROSPERO__)
++
++// FreeBSD's off_t is always 64-bit: the *64 large-file names are the plain ones.
++#define fseeko64 fseeko
++#define ftello64 ftello
++#define ftruncate64 ftruncate
++#define lseek64 lseek
++#define mmap64 mmap
++#define pread64 pread
++#define pwrite64 pwrite
++#define fopen64 fopen
++#define open64 open
++#define fstat64 fstat
++#define stat64 stat
++#define lstat64 lstat
++#define off64_t off_t
++
++// Linux-only clock; the monotonic clock is the closest PS5 equivalent.
++#define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC
++
++#endif  // __PROSPERO__
+diff --git a/include/rex/ps5_diag.h b/include/rex/ps5_diag.h
+new file mode 100644
+index 00000000..6d0d83bc
+--- /dev/null
++++ b/include/rex/ps5_diag.h
+@@ -0,0 +1,74 @@
++#pragma once
++/**
++ * @file        rex/ps5_diag.h
++ * @brief       [ps5 port] What a PS5 has instead of a debugger: progress
++ *              counters, where every thread is when the game stops drawing,
++ *              and a crash line at the end of the log.
++ *
++ * After the GTA IV PS5 port's rex/ps5_diag.h (elripalda), without its
++ * game-specific parts. Declared on every platform so shared code can call the
++ * counters; only the PS5 build has the implementation (src/core/ps5_diag.cpp).
++ */
++#include <atomic>
++#include <cstdint>
++
++#include <rex/platform.h>
++
++namespace rex::ps5diag {
++
++enum Counter : int {
++  kAccessViolations,  // faults reaching the MMIO handler
++  kMmioAccesses,      // of those, GPU register reads / writes emulated
++  kWatchFaults,       // of those, write watches / other handlers
++  kUnhandledFaults,   // of those, not handled (a real crash)
++  kVblanks,           // GPU vblanks
++  kInterrupts,        // guest GPU interrupt callbacks run
++  kWritePointer,      // ring buffer write pointer updates by the game
++  kPrimaryBuffers,    // ring buffer batches executed
++  kSwaps,             // frames the game presented
++  kCount
++};
++
++#if REX_PLATFORM_PS5
++extern std::atomic<uint64_t> counters[kCount];
++inline void Add(Counter c) { counters[c].fetch_add(1, std::memory_order_relaxed); }
++inline uint64_t Get(Counter c) { return counters[c].load(std::memory_order_relaxed); }
++
++// The reserved guest address space (all views live inside it).
++extern uintptr_t guest_arena_lo, guest_arena_hi;
++
++// Milliseconds on the TSC (a steady_clock read is a system call on the PS5).
++uint64_t NowMs();
++
++// Host stack samples: every rex thread registers itself; SampleAllThreads()
++// signals each one (SIGPROF), records its rip and the return-address-looking
++// words on its stack, and logs them relative to Anchor() so they can be
++// symbolized against the linked ELF offline (ps5/tools/ps5_symbolize.py).
++void RegisterThread(const char* what);
++// Before the calling thread exits: out of the samples.
++void UnregisterThread();
++void SampleAllThreads();
++
++// A host fault no handler took (a crash in some thread): the first one is
++// written to the end of the log file with the thread's return addresses
++// (without the heap); the thread then re-faults, and that calls crash_hook.
++void UnhandledHostFault(uintptr_t rip, uintptr_t address, uintptr_t rsp);
++// Called (once) when a thread keeps faulting: tells the player and ends the
++// game rather than leave it hanging. Set by main. It runs in the fault
++// handler: no heap (no logging) before it flushes the log.
++extern void (*crash_hook)(const char* what);
++// When the first unhandled fault was reported (NowMs() | 1; 0: none): a
++// watchdog ends the game if the crash hook doesn't.
++extern std::atomic<uint64_t> crashed_at_ms;
++// The log file, for the crash report (written without the logger).
++void SetLogPath(const char* path);
++// The game asked to quit (to the dashboard): the app's answer. Set: it
++// doesn't return when it succeeds.
++extern void (*title_exit_hook)();
++// An address inside the program: logged addresses are relative to it.
++uintptr_t Anchor();
++#else
++inline void Add(Counter) {}
++#endif
++
++}  // namespace rex::ps5diag
+diff --git a/include/rex/string/numeric.h b/include/rex/string/numeric.h
+index 658f40c3..c558caa9 100644
+--- a/include/rex/string/numeric.h
++++ b/include/rex/string/numeric.h
+@@ -26,7 +26,7 @@
+ #include <rex/string/utf8.h>
+ #include <rex/vec128.h>
+ 
+-#if REX_PLATFORM_MAC || REX_PLATFORM_NX  // libc++ without floating-point from_chars
++#if REX_PLATFORM_MAC || REX_PLATFORM_NX || REX_PLATFORM_PS5  // libc++ without floating-point from_chars
+ #include <locale.h>
+ #endif
+ 
+@@ -114,7 +114,7 @@ inline T ifs(const std::string_view value, bool force_hex) {
+   return result;
+ }
+ 
+-#if REX_PLATFORM_MAC || REX_PLATFORM_NX  // libc++ without floating-point from_chars
++#if REX_PLATFORM_MAC || REX_PLATFORM_NX || REX_PLATFORM_PS5  // libc++ without floating-point from_chars
+ template <typename T>
+ inline std::from_chars_result portable_float_from_chars(const char* first, const char* last,
+                                                         T& value) {
+@@ -189,7 +189,7 @@ inline T fpfs(const std::string_view value, bool force_hex) {
+     }
+     std::memcpy(&result, &pun, sizeof(PUN));
+   } else {
+-#if REX_PLATFORM_MAC || REX_PLATFORM_NX  // libc++ without floating-point from_chars
++#if REX_PLATFORM_MAC || REX_PLATFORM_NX || REX_PLATFORM_PS5  // libc++ without floating-point from_chars
+     auto [p, error] = portable_float_from_chars(range.data(), range.data() + range.size(), result);
+ #else
+     auto [p, error] = std::from_chars(range.data(), range.data() + range.size(), result,
+@@ -316,7 +316,7 @@ inline vec128_t from_string<vec128_t>(const std::string_view value, bool force_h
+         assert_always();
+         return vec128_t();
+       }
+-#if REX_PLATFORM_MAC || REX_PLATFORM_NX  // libc++ without floating-point from_chars
++#if REX_PLATFORM_MAC || REX_PLATFORM_NX || REX_PLATFORM_PS5  // libc++ without floating-point from_chars
+       auto result = detail::portable_float_from_chars(p, end, v.f32[i]);
+ #else
+       auto result = std::from_chars(p, end, v.f32[i], std::chars_format::general);
+diff --git a/include/rex/system/mmio_handler.h b/include/rex/system/mmio_handler.h
+index 7ae42a89..c9c3115b 100644
+--- a/include/rex/system/mmio_handler.h
++++ b/include/rex/system/mmio_handler.h
+@@ -45,7 +45,7 @@ class MMIOHandler {
+ 
+   typedef uint32_t (*HostToGuestVirtual)(const void* context, const void* host_address);
+   typedef bool (*AccessViolationCallback)(
+-      std::unique_lock<std::recursive_mutex> global_lock_locked_once, void* context,
++      rex::thread::global_lock_t global_lock_locked_once, void* context,
+       void* host_address, bool is_write);
+ 
+   // access_violation_callback is called with global_critical_region locked once
+diff --git a/include/rex/system/xmemory.h b/include/rex/system/xmemory.h
+index 0c39a420..8ad92ee9 100644
+--- a/include/rex/system/xmemory.h
++++ b/include/rex/system/xmemory.h
+@@ -39,7 +39,10 @@ namespace rex::memory::detail {
+ ///   - macOS x86_64:    4KB granularity  -> no offset
+ ///   - Linux (any):     4KB granularity  -> no offset (mmap handles it natively)
+ constexpr u32 PhysicalHostOffset([[maybe_unused]] u32 guest_addr) noexcept {
+-#if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && defined(__aarch64__))
++// [ps5 port] The PS5 too (16 KB pages, 64 KB direct memory): the recompiled
++// code's REX_PHYS_HOST_OFFSET adds it there, and this must match, or kernel
++// calls given a 0xE0000000 pointer read and write 4 KB away from the game.
++#if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && defined(__aarch64__)) || REX_PLATFORM_PS5
+   return (guest_addr >= 0xE0000000u) ? 0x1000u : 0u;
+ #else
+   return 0u;
+@@ -246,7 +249,7 @@ class BaseHeap {
+   //
+   // Returns an empty (unlocked) guard when guest pages are at least host page
+   // sized, since no reconcile happens then and the lock would be pure cost.
+-  virtual std::unique_lock<std::recursive_mutex> AcquireHostPageReconcileLock() const;
++  virtual rex::thread::global_lock_t AcquireHostPageReconcileLock() const;
+ 
+   // Whether a host page is currently write-watched for guest invalidation.
+   // SyncHostPageAccess must not restore write access to such a page: the watch
+@@ -316,7 +319,7 @@ class PhysicalHeap : public BaseHeap {
+   void EnableAccessCallbacks(uint32_t physical_address, uint32_t length,
+                              bool enable_invalidation_notifications, bool enable_data_providers);
+   // Returns true if any page in the range was watched.
+-  bool TriggerCallbacks(std::unique_lock<std::recursive_mutex> global_lock_locked_once,
++  bool TriggerCallbacks(rex::thread::global_lock_t global_lock_locked_once,
+                         uint32_t virtual_address, uint32_t length, bool is_write,
+                         bool unwatch_exact_range, bool unprotect = true);
+ 
+@@ -329,7 +332,7 @@ class PhysicalHeap : public BaseHeap {
+   // pass takes the global critical region. Acquire whenever this heap or its
+   // parent will need it, so the ordering holds even for a heap whose own guest
+   // pages are large enough to skip reconciling but whose parent's are not.
+-  std::unique_lock<std::recursive_mutex> AcquireHostPageReconcileLock() const override;
++  rex::thread::global_lock_t AcquireHostPageReconcileLock() const override;
+ 
+   VirtualHeap* parent_heap_;
+ 
+@@ -507,7 +510,7 @@ class Memory {
+   // TODO(Triang3l): Implement data providers - this is why locking depth of 1
+   // will be required in the future.
+   bool TriggerPhysicalMemoryCallbacks(
+-      std::unique_lock<std::recursive_mutex> global_lock_locked_once, uint32_t virtual_address,
++      rex::thread::global_lock_t global_lock_locked_once, uint32_t virtual_address,
+       uint32_t length, bool is_write, bool unwatch_exact_range, bool unprotect = true);
+ 
+   // Allocates virtual memory from the 'system' heap.
+@@ -560,16 +563,19 @@ class Memory {
+  private:
+ #if REX_PLATFORM_MAC
+   int MapViewsMac();
++#endif
++#if REX_PLATFORM_PS5
++  int MapViewsPs5();  // [ps5 port] guest memory in PS5 direct memory
+ #endif
+   int MapViews(uint8_t* mapping_base);
+   void UnmapViews();
+ 
+   static uint32_t HostToGuestVirtualThunk(const void* context, const void* host_address);
+ 
+-  bool AccessViolationCallback(std::unique_lock<std::recursive_mutex> global_lock_locked_once,
++  bool AccessViolationCallback(rex::thread::global_lock_t global_lock_locked_once,
+                                void* host_address, bool is_write);
+   static bool AccessViolationCallbackThunk(
+-      std::unique_lock<std::recursive_mutex> global_lock_locked_once, void* context,
++      rex::thread::global_lock_t global_lock_locked_once, void* context,
+       void* host_address, bool is_write);
+ 
+   std::filesystem::path file_name_;
+diff --git a/include/rex/thread/fiber.h b/include/rex/thread/fiber.h
+index b0935e2b..20f3d1fe 100644
+--- a/include/rex/thread/fiber.h
++++ b/include/rex/thread/fiber.h
+@@ -20,7 +20,9 @@
+ // before including <ucontext.h>.
+ #define _XOPEN_SOURCE 700
+ #endif
++#if !REX_PLATFORM_PS5  // [ps5 port] the PS5's ucontext functions don't switch: fiber_posix.cpp has its own
+ #include <ucontext.h>
++#endif
+ #include <cstdint>
+ #include <vector>
+ #endif
+@@ -57,7 +59,11 @@ struct Fiber {
+   void* handle_ = nullptr;
+   bool is_thread_fiber_ = false;
+ #elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
++#if REX_PLATFORM_PS5
++  void* sp_ = nullptr;  // [ps5 port] saved stack pointer (fiber_posix.cpp: x86-64 switch)
++#else
+   ucontext_t context_{};
++#endif  // REX_PLATFORM_PS5
+   std::vector<uint8_t> stack_;
+   void (*entry_)(void*) = nullptr;
+   void* arg_ = nullptr;
+diff --git a/include/rex/thread/mutex.h b/include/rex/thread/mutex.h
+index 6e5755a4..ec840127 100644
+--- a/include/rex/thread/mutex.h
++++ b/include/rex/thread/mutex.h
+@@ -13,8 +13,81 @@
+ 
+ #include <mutex>
+ 
++#if defined(__PROSPERO__)
++#include <pthread.h>
++
++#include <atomic>
++#include <cstdint>
++#endif
++
+ namespace rex::thread {
+ 
++#if defined(__PROSPERO__)
++// [ps5 port] The global critical region's lock on the PS5: a recursive spin
++// lock (owner thread + depth). The guest takes this lock constantly - every
++// interrupt-disabled stretch and lwarx/stwcx. retry loop of the recompiled
++// code enters and leaves it - and std::recursive_mutex costs the PS5's
++// kernel a round trip each time; under contention its sleeping waiters wake
++// late, and the whole game ran slow (frame rate fine, game speed off).
++// Uncontended, this is a compare-exchange; contended, it spins, then
++// yields, then naps 50 us at a time (mutex.cpp).
++// (From the GTA IV PS5 port, where it was measured on a console.)
++class global_recursive_mutex {
++ public:
++  void lock() {
++    const uintptr_t self = Self();
++    if (owner_.load(std::memory_order_relaxed) == self) {
++      ++depth_;
++      return;
++    }
++    uintptr_t expected = 0;
++    if (!owner_.compare_exchange_strong(expected, self, std::memory_order_acquire,
++                                        std::memory_order_relaxed)) {
++      LockSlow(self);
++    }
++    depth_ = 1;
++  }
++  bool try_lock() {
++    const uintptr_t self = Self();
++    if (owner_.load(std::memory_order_relaxed) == self) {
++      ++depth_;
++      return true;
++    }
++    uintptr_t expected = 0;
++    if (!owner_.compare_exchange_strong(expected, self, std::memory_order_acquire,
++                                        std::memory_order_relaxed)) {
++      return false;
++    }
++    depth_ = 1;
++    return true;
++  }
++  void unlock() {
++    if (owner_.load(std::memory_order_relaxed) != Self()) {
++      return;  // (not this thread's: nothing to release)
++    }
++    if (--depth_ == 0) {
++      owner_.store(0, std::memory_order_release);
++    }
++  }
++  // The guest's MSR[EE] check: inside the region only on the thread holding it.
++  bool owned_by_current_thread() const { return owner_.load(std::memory_order_relaxed) == Self(); }
++
++ private:
++  // (pthread_self(): the thread pointer at %fs:0 is not unique per thread on
++  // the PS5 - a lock keyed on it let two threads in.)
++  static uintptr_t Self() { return reinterpret_cast<uintptr_t>(pthread_self()); }
++  void LockSlow(uintptr_t self);
++
++  std::atomic<uintptr_t> owner_{0};
++  uint32_t depth_ = 0;
++};
++using global_mutex = global_recursive_mutex;
++#else
++using global_mutex = std::recursive_mutex;
++#endif
++// A held lock of the global critical region (callbacks that run inside it get one).
++using global_lock_t = std::unique_lock<global_mutex>;
++
+ // The global critical region mutex singleton.
+ // This must guard any operation that may suspend threads or be sensitive to
+ // being suspended such as global table locks and such.
+@@ -55,30 +128,30 @@ namespace rex::thread {
+ // };
+ class global_critical_region {
+  public:
+-  static std::recursive_mutex& mutex();
++  static global_mutex& mutex();
+ 
+   // Acquires a lock on the global critical section.
+   // Use this when keeping an instance is not possible. Otherwise, prefer
+   // to keep an instance of global_critical_region near the members requiring
+   // it to keep things readable.
+-  static std::unique_lock<std::recursive_mutex> AcquireDirect() {
+-    return std::unique_lock<std::recursive_mutex>(mutex());
++  static std::unique_lock<global_mutex> AcquireDirect() {
++    return std::unique_lock<global_mutex>(mutex());
+   }
+ 
+   // Acquires a lock on the global critical section.
+-  inline std::unique_lock<std::recursive_mutex> Acquire() {
+-    return std::unique_lock<std::recursive_mutex>(mutex());
++  inline std::unique_lock<global_mutex> Acquire() {
++    return std::unique_lock<global_mutex>(mutex());
+   }
+ 
+   // Acquires a deferred lock on the global critical section.
+-  inline std::unique_lock<std::recursive_mutex> AcquireDeferred() {
+-    return std::unique_lock<std::recursive_mutex>(mutex(), std::defer_lock);
++  inline std::unique_lock<global_mutex> AcquireDeferred() {
++    return std::unique_lock<global_mutex>(mutex(), std::defer_lock);
+   }
+ 
+   // Tries to acquire a lock on the glboal critical section.
+   // Check owns_lock() to see if the lock was successfully acquired.
+-  inline std::unique_lock<std::recursive_mutex> TryAcquire() {
+-    return std::unique_lock<std::recursive_mutex>(mutex(), std::try_to_lock);
++  inline std::unique_lock<global_mutex> TryAcquire() {
++    return std::unique_lock<global_mutex>(mutex(), std::try_to_lock);
+   }
+ };
+ 
+diff --git a/include/rex/ui/surface.h b/include/rex/ui/surface.h
+index d89b6463..dbee1143 100644
+--- a/include/rex/ui/surface.h
++++ b/include/rex/ui/surface.h
+@@ -39,6 +39,9 @@ class Surface {
+     kTypeIndex_CAMetalLayer,
+ #if REX_PLATFORM_NX
+     kTypeIndex_ViNN,  // N2: nn::vi layer (VK_NN_vi_surface)
++#endif
++#if REX_PLATFORM_PS5
++    kTypeIndex_Ps5Display,  // [ps5 port] the whole TV, a VK_KHR_display plane surface
+ #endif
+   };
+   using TypeFlags = uint32_t;
+@@ -50,6 +53,9 @@ class Surface {
+     kTypeFlag_CAMetalLayer = TypeFlags(1) << kTypeIndex_CAMetalLayer,
+ #if REX_PLATFORM_NX
+     kTypeFlag_ViNN = TypeFlags(1) << kTypeIndex_ViNN,
++#endif
++#if REX_PLATFORM_PS5
++    kTypeFlag_Ps5Display = TypeFlags(1) << kTypeIndex_Ps5Display,
+ #endif
+   };
+ 
+diff --git a/include/rex/ui/surface_ps5.h b/include/rex/ui/surface_ps5.h
+new file mode 100644
+index 00000000..61d85885
+--- /dev/null
++++ b/include/rex/ui/surface_ps5.h
+@@ -0,0 +1,37 @@
++#pragma once
++/**
++ * [ps5 port] PS5: the TV, through VK_KHR_display (PS5_Mesa's RADV winsys).
++ * There is no window: the surface is the whole display, sized by the display
++ * mode the presenter picks (4K when the TV offers it).
++ */
++
++#include <cstdint>
++
++#include <rex/ui/surface.h>
++
++namespace rex {
++namespace ui {
++
++class Ps5DisplaySurface final : public Surface {
++ public:
++  Ps5DisplaySurface(uint32_t width, uint32_t height) : width_(width), height_(height) {}
++  TypeIndex GetType() const override { return kTypeIndex_Ps5Display; }
++  void SetSize(uint32_t width, uint32_t height) {
++    width_ = width;
++    height_ = height;
++  }
++
++ protected:
++  bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override {
++    width_out = width_;
++    height_out = height_;
++    return true;
++  }
++
++ private:
++  uint32_t width_;
++  uint32_t height_;
++};
++
++}  // namespace ui
++}  // namespace rex
+diff --git a/include/rex/ui/vulkan/functions/instance_khr_display.inc b/include/rex/ui/vulkan/functions/instance_khr_display.inc
+new file mode 100644
+index 00000000..4df17f05
+--- /dev/null
++++ b/include/rex/ui/vulkan/functions/instance_khr_display.inc
+@@ -0,0 +1,7 @@
++// [ps5 port] VK_KHR_display functions: the PS5 presents to a display plane.
++XE_UI_VULKAN_FUNCTION(vkGetPhysicalDeviceDisplayPropertiesKHR)
++XE_UI_VULKAN_FUNCTION(vkGetPhysicalDeviceDisplayPlanePropertiesKHR)
++XE_UI_VULKAN_FUNCTION(vkGetDisplayPlaneSupportedDisplaysKHR)
++XE_UI_VULKAN_FUNCTION(vkGetDisplayModePropertiesKHR)
++XE_UI_VULKAN_FUNCTION(vkGetDisplayPlaneCapabilitiesKHR)
++XE_UI_VULKAN_FUNCTION(vkCreateDisplayPlaneSurfaceKHR)
+diff --git a/include/rex/ui/vulkan/instance.h b/include/rex/ui/vulkan/instance.h
+index 38e528d9..547d135a 100644
+--- a/include/rex/ui/vulkan/instance.h
++++ b/include/rex/ui/vulkan/instance.h
+@@ -74,6 +74,10 @@ class VulkanInstance {
+     // VK_EXT_metal_surface (#217)
+ #ifdef VK_USE_PLATFORM_METAL_EXT
+ #include <rex/ui/vulkan/functions/instance_ext_metal_surface.inc>
++#endif
++    // VK_KHR_display (#3) - [ps5 port]
++#if REX_PLATFORM_PS5
++#include <rex/ui/vulkan/functions/instance_khr_display.inc>
+ #endif
+     // VK_KHR_get_physical_device_properties2 (#60, promoted to 1.1)
+ #include <rex/ui/vulkan/functions/instance_1_1_khr_get_physical_device_properties2.inc>
+@@ -108,6 +112,9 @@ class VulkanInstance {
+ #endif
+ #ifdef VK_USE_PLATFORM_VI_NN
+     bool ext_NN_vi_surface = false;  // #63 (N2)
++#endif
++#if REX_PLATFORM_PS5
++    bool ext_KHR_display = false;  // #3 [ps5 port]
+ #endif
+     bool ext_1_1_KHR_get_physical_device_properties2 = false;  // #60
+     bool ext_EXT_debug_utils = false;                          // #129
+diff --git a/src/audio/CMakeLists.txt b/src/audio/CMakeLists.txt
+index d55f16ab..f97d0177 100644
+--- a/src/audio/CMakeLists.txt
++++ b/src/audio/CMakeLists.txt
+@@ -14,6 +14,7 @@ add_library(rexaudio OBJECT
+     # SDL backend
+     sdl/sdl_audio_system.cpp
+     sdl/sdl_audio_driver.cpp
++    $<$<BOOL:${PS5}>:ps5/ps5_audio_driver.cpp>
+ )
+ add_library(rex::audio ALIAS rexaudio)
+ 
+@@ -39,3 +40,10 @@ target_link_libraries(rexaudio
+     PUBLIC rexcore SDL3::SDL3
+     PRIVATE libavcodec libavutil
+ )
++
++if(PS5)
++    # [ps5 port] With the PS5 target, clang's implicit __va_list_tag from the
++    # PCH and the one FFmpeg's <stdarg.h> use in this file don't unify
++    # (va_list "__va_list_tag *" != "__va_list_tag *"): no PCH here.
++    set_source_files_properties(xma_decoder.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
++endif()
+diff --git a/src/audio/ps5/ps5_audio_driver.cpp b/src/audio/ps5/ps5_audio_driver.cpp
+new file mode 100644
+index 00000000..cff80358
+--- /dev/null
++++ b/src/audio/ps5/ps5_audio_driver.cpp
+@@ -0,0 +1,146 @@
++/**
++ * [ps5 port] sceAudioOut audio driver (see ps5_audio_driver.h). After the GTA
++ * IV PS5 port's driver (elripalda).
++ */
++#include <rex/audio/ps5/ps5_audio_driver.h>
++
++#include <algorithm>
++#include <cstring>
++
++#include <rex/assert.h>
++#include <rex/audio/conversion.h>
++#include <rex/audio/downmix.h>
++#include <rex/audio/flags.h>
++#include <rex/cvar.h>
++#include <rex/logging.h>
++
++extern "C" {
++int32_t sceAudioOutInit(void);
++int32_t sceAudioOutOpen(int32_t user_id, int32_t type, int32_t index, uint32_t len, uint32_t freq,
++                        uint32_t param);
++int32_t sceAudioOutOutput(int32_t handle, const void* ptr);
++int32_t sceAudioOutClose(int32_t handle);
++}
++
++namespace rex::audio::ps5 {
++
++namespace {
++constexpr int32_t kSystemUser = 0xFF;
++constexpr int32_t kPortTypeMain = 0;
++constexpr uint32_t kFormatS16Stereo = 1;
++}  // namespace
++
++Ps5AudioDriver::Ps5AudioDriver(memory::Memory* memory, rex::thread::Semaphore* semaphore)
++    : AudioDriver(memory), semaphore_(semaphore) {}
++
++Ps5AudioDriver::~Ps5AudioDriver() { Shutdown(); }
++
++bool Ps5AudioDriver::Initialize() {
++  // (Already initialized by someone else in the process is fine.)
++  (void)sceAudioOutInit();
++  port_ = sceAudioOutOpen(kSystemUser, kPortTypeMain, 0, kChannelSamples, kFrequency,
++                          kFormatS16Stereo);
++  if (port_ < 0) {
++    REXAPU_ERROR("PS5 audio: sceAudioOutOpen failed ({:#x})", uint32_t(port_));
++    return false;
++  }
++  REXAPU_INFO("PS5 audio: port {} (48000 Hz, 256-sample frames, s16 stereo)", port_);
++  running_ = true;
++  thread_ = std::thread([this] { OutputThread(); });
++  return true;
++}
++
++void Ps5AudioDriver::SubmitFrame(uint32_t frame_ptr) {
++  const auto input_frame = memory_->TranslateVirtual<float*>(frame_ptr);
++  float* frame;
++  {
++    std::lock_guard<std::mutex> guard(frames_mutex_);
++    if (frames_unused_.empty()) {
++      frame = new float[kFrameSamples];
++    } else {
++      frame = frames_unused_.top();
++      frames_unused_.pop();
++    }
++  }
++  std::memcpy(frame, input_frame, kFrameSamples * sizeof(float));
++  std::lock_guard<std::mutex> guard(frames_mutex_);
++  frames_queued_.push(frame);
++}
++
++// sceAudioOutOutput blocks until the previous buffer has started playing, so
++// this loop runs at exactly the output rate (one frame per 5.33 ms): a queued
++// game frame when there is one (then the game may submit another: release
++// the semaphore), else silence.
++void Ps5AudioDriver::OutputThread() {
++  float stereo[kChannelSamples * 2];
++  int16_t pcm[kChannelSamples * 2];
++  // Gaps: the game's sound not there in time (silence played instead). Logged
++  // every 10 s there were any.
++  bool started = false, in_gap = false;
++  uint32_t gaps = 0, silent = 0, played = 0;
++  while (running_) {
++    float* frame = nullptr;
++    {
++      std::lock_guard<std::mutex> guard(frames_mutex_);
++      if (!frames_queued_.empty()) {
++        frame = frames_queued_.front();
++        frames_queued_.pop();
++      }
++    }
++    if (frame) {
++      started = true, in_gap = false;
++    } else if (started) {
++      gaps += in_gap ? 0 : 1;
++      in_gap = true;
++      ++silent;
++    }
++    if (++played == kFrequency * 10 / kChannelSamples) {
++      if (gaps) {
++        REXAPU_INFO("PS5 audio: {} gaps in 10 s ({:.0f} ms of silence)", gaps,
++                    double(silent) * kChannelSamples * 1000.0 / kFrequency);
++      }
++      gaps = silent = played = 0;
++    }
++    if (frame && !REXCVAR_GET(audio_mute)) {
++      // (the fold and gain the Audio settings give, as the SDL driver's stereo path)
++      conversion::sequential_6_BE_to_interleaved_2_LE(stereo, frame, kChannelSamples, GetStereoFold(),
++                                                      GetOutputGain());
++      for (uint32_t i = 0; i < kChannelSamples * 2; ++i) {
++        const float s = std::clamp(stereo[i], -1.0f, 1.0f);
++        pcm[i] = int16_t(s * 32767.0f);
++      }
++    } else {
++      std::memset(pcm, 0, sizeof(pcm));
++    }
++    if (frame) {
++      {
++        std::lock_guard<std::mutex> guard(frames_mutex_);
++        frames_unused_.push(frame);
++      }
++      semaphore_->Release(1, nullptr);
++    }
++    sceAudioOutOutput(port_, pcm);
++  }
++}
++
++void Ps5AudioDriver::Shutdown() {
++  if (running_.exchange(false) && thread_.joinable()) {
++    thread_.join();
++  }
++  if (port_ >= 0) {
++    sceAudioOutOutput(port_, nullptr);  // (waits for the last buffer)
++    sceAudioOutClose(port_);
++    port_ = -1;
++  }
++  std::lock_guard<std::mutex> guard(frames_mutex_);
++  while (!frames_unused_.empty()) {
++    delete[] frames_unused_.top();
++    frames_unused_.pop();
++  }
++  while (!frames_queued_.empty()) {
++    delete[] frames_queued_.front();
++    frames_queued_.pop();
++  }
++}
++
++}  // namespace rex::audio::ps5
+diff --git a/src/audio/sdl/sdl_audio_system.cpp b/src/audio/sdl/sdl_audio_system.cpp
+index 68da0cf9..1de6aa46 100644
+--- a/src/audio/sdl/sdl_audio_system.cpp
++++ b/src/audio/sdl/sdl_audio_system.cpp
+@@ -12,6 +12,10 @@
+ #include <rex/audio/flags.h>
+ #include <rex/audio/sdl/sdl_audio_driver.h>
+ #include <rex/audio/sdl/sdl_audio_system.h>
++#include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <rex/audio/ps5/ps5_audio_driver.h>
++#endif
+ 
+ namespace rex::audio::sdl {
+ 
+@@ -32,6 +36,16 @@ void SDLAudioSystem::Initialize() {
+ X_STATUS SDLAudioSystem::CreateDriver([[maybe_unused]] size_t index,
+                                       rex::thread::Semaphore* semaphore, AudioDriver** out_driver) {
+   assert_not_null(out_driver);
++#if REX_PLATFORM_PS5
++  // [ps5 port] SDL has no PS5 audio backend: sceAudioOut directly.
++  auto ps5_driver = new ps5::Ps5AudioDriver(memory_, semaphore);
++  if (!ps5_driver->Initialize()) {
++    delete ps5_driver;
++    return X_STATUS_UNSUCCESSFUL;
++  }
++  *out_driver = ps5_driver;
++  return X_STATUS_SUCCESS;
++#endif
+   auto driver = new SDLAudioDriver(memory_, semaphore);
+   if (!driver->Initialize()) {
+     driver->Shutdown();
+@@ -45,6 +59,13 @@ X_STATUS SDLAudioSystem::CreateDriver([[maybe_unused]] size_t index,
+ 
+ void SDLAudioSystem::DestroyDriver(AudioDriver* driver) {
+   assert_not_null(driver);
++#if REX_PLATFORM_PS5
++  if (auto* ps5_driver = dynamic_cast<ps5::Ps5AudioDriver*>(driver)) {
++    ps5_driver->Shutdown();
++    delete ps5_driver;
++    return;
++  }
++#endif
+   auto sdldriver = dynamic_cast<SDLAudioDriver*>(driver);
+   assert_not_null(sdldriver);
+   sdldriver->Shutdown();
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index 1ddafd08..3903365d 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -98,7 +98,11 @@ target_include_directories(rexcore PRIVATE
+     ${PROJECT_SOURCE_DIR}/thirdparty/cli11/include
+ )
+ 
+-if(APPLE)
++if(PS5)
++    # [ps5 port] the SDK's libc has pthreads; there is no librt / libdl.
++    target_link_libraries(rexcore PUBLIC SceSystemService SceUserService ScePad SceAudioOut ps5platform)
++    target_sources(rexcore PRIVATE ps5_libc_extras.c ps5_diag.cpp)
++elseif(APPLE)
+     target_link_libraries(rexcore PRIVATE pthread)
+ elseif(UNIX)
+     target_link_libraries(rexcore PRIVATE pthread rt dl)
+diff --git a/src/core/clock.cpp b/src/core/clock.cpp
+index ae72b7ae..3c5525e3 100644
+--- a/src/core/clock.cpp
++++ b/src/core/clock.cpp
+@@ -10,8 +10,11 @@
+  */
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <limits>
++#include <memory>
+ #include <mutex>
++#include <vector>
+ 
+ #include <rex/chrono/clock.h>
+ #include <rex/cvar.h>
+@@ -42,6 +45,23 @@ uint64_t last_host_tick_count_ = Clock::QueryHostTickCount();
+ // Mutex to ensure last_host_tick_count_ and last_guest_tick_count_ are in sync
+ std::mutex tick_mutex_;
+ 
++#if REX_PLATFORM_PS5
++// [ps5 port] The guest clock as a function of the host's: guest ticks at a
++// host tick are guest_base + (host - host_base) * numerator / denominator.
++// Every mftb read took tick_mutex_ (a system call when another thread held
++// it) and dropped the remainder of each step, so the clock lost time the more
++// often the game read it. Reading it now takes no lock and loses nothing.
++struct GuestClockMapping {
++  uint64_t host_base, guest_base, numerator, denominator;
++};
++std::atomic<const GuestClockMapping*> guest_clock_mapping_{nullptr};
++inline uint64_t GuestTicksAt(const GuestClockMapping& mapping, uint64_t host) {
++  const uint64_t delta = host > mapping.host_base ? host - mapping.host_base : 0;
++  return mapping.guest_base +
++         uint64_t((unsigned __int128)delta * mapping.numerator / mapping.denominator);
++}
++#endif
++
+ void RecomputeGuestTickScalar() {
+   // Create a rational number with numerator (first) and denominator (second)
+   auto frac = std::make_pair(guest_tick_frequency_, Clock::QueryHostTickFrequency());
+@@ -58,6 +78,26 @@ void RecomputeGuestTickScalar() {
+   reduce_fraction(frac);
+ 
+   std::lock_guard<std::mutex> lock(tick_mutex_);
++#if REX_PLATFORM_PS5
++  // Continue the guest clock from where it is now, at the new rate.
++  const uint64_t host_now = Clock::QueryHostTickCount();
++  uint64_t guest_now;
++  if (const GuestClockMapping* current = guest_clock_mapping_.load(std::memory_order_acquire)) {
++    guest_now = GuestTicksAt(*current, host_now);
++  } else {
++    const uint64_t delta = host_now > last_host_tick_count_ ? host_now - last_host_tick_count_ : 0;
++    guest_now = last_guest_tick_count_ +
++                uint64_t((unsigned __int128)delta * guest_tick_ratio_.first / guest_tick_ratio_.second);
++  }
++  last_host_tick_count_ = host_now;
++  last_guest_tick_count_ = guest_now;
++  // Readers may still hold an older mapping, so mappings are never freed
++  // (the rate changes a handful of times a run).
++  static std::vector<std::unique_ptr<GuestClockMapping>> mappings;
++  mappings.push_back(std::make_unique<GuestClockMapping>(
++      GuestClockMapping{host_now, guest_now, frac.first, frac.second}));
++  guest_clock_mapping_.store(mappings.back().get(), std::memory_order_release);
++#endif
+   guest_tick_ratio_ = frac;
+ }
+ 
+@@ -68,9 +108,22 @@ uint64_t UpdateGuestClock() {
+ 
+   if (REXCVAR_GET(clock_no_scaling)) {
+     // Nothing to update, calculate on the fly
++#if REX_PLATFORM_PS5
++    // [ps5 port] The host tick is the TSC (billions a second, counted since
++    // the console started): times the ratio's numerator it overflows 64 bits
++    // within minutes.
++    return uint64_t((unsigned __int128)host_tick_count * guest_tick_ratio_.first /
++                    guest_tick_ratio_.second);
++#else
+     return host_tick_count * guest_tick_ratio_.first / guest_tick_ratio_.second;
++#endif
+   }
+ 
++#if REX_PLATFORM_PS5
++  if (const GuestClockMapping* mapping = guest_clock_mapping_.load(std::memory_order_acquire)) {
++    return GuestTicksAt(*mapping, host_tick_count);
++  }
++#endif
+   std::unique_lock<std::mutex> lock(tick_mutex_, std::defer_lock);
+   if (lock.try_lock()) {
+     // Translate host tick count to guest tick count.
+diff --git a/src/core/clock_posix.cpp b/src/core/clock_posix.cpp
+index d40b3612..ee41f04c 100644
+--- a/src/core/clock_posix.cpp
++++ b/src/core/clock_posix.cpp
+@@ -21,6 +21,20 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC || REX_PLATFORM_NX, "This f
+ #include <nn/os.h>
+ #endif
+ 
++#if REX_PLATFORM_PS5
++// [ps5 port] clock_gettime is a system call on the PS5; the guest reads the
++// clock (mftb, KeQueryPerformanceCounter) tens of thousands of times a second.
++// The TSC is invariant and in step across the cores, as titles rely on.
++extern "C" uint64_t sceKernelReadTsc(void);
++extern "C" uint64_t sceKernelGetTscFrequency(void);
++namespace {
++uint64_t Ps5TscFrequency() {
++  static const uint64_t frequency = sceKernelGetTscFrequency();
++  return frequency;
++}
++}  // namespace
++#endif
++
+ namespace rex::chrono {
+ 
+ uint64_t Clock::host_tick_frequency_platform() {
+@@ -34,6 +48,13 @@ uint64_t Clock::host_tick_frequency_platform() {
+   mach_timebase_info_data_t info;
+   mach_timebase_info(&info);
+   return (uint64_t)((1000000000ull * (uint64_t)info.denom) / (uint64_t)info.numer);
++#elif REX_PLATFORM_PS5
++  // [ps5 port] The TSC when the console reports its rate; else nanoseconds
++  // (host_tick_count_platform() then counts those: 1 GHz whatever the clock's
++  // resolution - FreeBSD's clock_getres() is more than 1 ns on a PS5, and
++  // 1e9 / that made the guest clock run that many times too fast).
++  if (const uint64_t frequency = Ps5TscFrequency()) return frequency;
++  return 1000000000ull;
+ #else
+   timespec res;
+   int error = clock_getres(CLOCK_MONOTONIC_RAW, &res);
+@@ -55,6 +76,9 @@ uint64_t Clock::host_tick_count_platform() {
+   // inconsistent with the 24 MHz mach frequency and cause ~41x time acceleration.
+   return mach_absolute_time();
+ #else
++#if REX_PLATFORM_PS5
++  if (Ps5TscFrequency()) return sceKernelReadTsc();
++#endif
+   timespec tp;
+   int error = clock_gettime(CLOCK_MONOTONIC_RAW, &tp);
+   assert_zero(error);
+@@ -79,7 +103,13 @@ uint64_t Clock::QueryHostSystemTime() {
+ }
+ 
+ uint64_t Clock::QueryHostUptimeMillis() {
++#if REX_PLATFORM_PS5
++  // [ps5 port] TSC ticks times 1000 overflows 64 bits after ~70 days of uptime
++  // (rest mode keeps counting).
++  return uint64_t((unsigned __int128)host_tick_count_platform() * 1000 / host_tick_frequency_platform());
++#else
+   return host_tick_count_platform() * 1000 / host_tick_frequency_platform();
++#endif
+ }
+ 
+ }  // namespace rex::chrono
+diff --git a/src/core/exception_handler_posix.cpp b/src/core/exception_handler_posix.cpp
+index 8b1c76a3..1bdb8cd6 100644
+--- a/src/core/exception_handler_posix.cpp
++++ b/src/core/exception_handler_posix.cpp
+@@ -15,6 +15,10 @@
+ #define _XOPEN_SOURCE 700
+ #endif
+ 
++#include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <rex/ps5_diag.h>
++#endif
+ #include <rex/exception_handler.h>
+ 
+ #if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
+@@ -22,6 +26,7 @@
+ #include <signal.h>
+ 
+ #include <cstdint>
++#include <cstdlib>
+ #include <cstring>
+ 
+ #include <rex/assert.h>
+@@ -31,15 +36,81 @@
+ 
+ #include <ucontext.h>
+ 
++#if REX_PLATFORM_PS5
++// [ps5 port] The PS5 kernel hands signal handlers the FreeBSD amd64 ucontext
++// with 48 extra bytes in front: mcontext starts at +64, not at +16 where the
++// SDK header puts it (measured on a 13.60 console by the GTA IV port: rdi +72,
++// rax +120, rip +224). View it the way the Linux code below reads gregs /
++// fpregs, as 64-bit slots of FreeBSD's struct __mcontext.
++namespace {
++using greg_t = uint64_t;
++enum : int {
++  REG_RDI = 1, REG_RSI = 2, REG_RDX = 3, REG_RCX = 4, REG_R8 = 5, REG_R9 = 6,
++  REG_RAX = 7, REG_RBX = 8, REG_RBP = 9, REG_R10 = 10, REG_R11 = 11, REG_R12 = 12,
++  REG_R13 = 13, REG_R14 = 14, REG_R15 = 15, REG_ERR = 19, REG_RIP = 20, REG_EFL = 22,
++  REG_RSP = 23,
++};
++constexpr size_t kPs5McontextOffset = 64;
++constexpr size_t kPs5FpstateSlot = 28;  // mc_fpstate: FXSAVE area, 16-byte aligned
++struct Ps5FpRegs {
++  uint8_t fxsave_header[160];  // FCW ... MXCSR, ST0-ST7
++  uint8_t _xmm[16][16];
++};
++struct Ps5MContext {
++  greg_t* gregs;
++  Ps5FpRegs* fpregs;
++  explicit Ps5MContext(void* signal_context) {
++    auto* base = reinterpret_cast<uint8_t*>(signal_context) + kPs5McontextOffset;
++    gregs = reinterpret_cast<greg_t*>(base);
++    fpregs = reinterpret_cast<Ps5FpRegs*>(base + kPs5FpstateSlot * sizeof(greg_t));
++  }
++};
++}  // namespace
++#endif
++
+ namespace rex::arch {
+ 
+ bool signal_handlers_installed_ = false;
+ struct sigaction original_sigill_handler_;
+ struct sigaction original_sigsegv_handler_;
+-#if REX_PLATFORM_MAC
++#if REX_PLATFORM_MAC || REX_PLATFORM_PS5  // [ps5 port] protection faults can arrive as SIGBUS
+ struct sigaction original_sigbus_handler_;
+ #endif
+ 
++#if REX_PLATFORM_PS5
++// [ps5 port] A fault nothing handled: whoever was installed before us gets
++// it; with nobody there, the default action (the process ends).
++static void DispatchUnhandledSignal(int signal_number, siginfo_t* signal_info,
++                                    void* signal_context) {
++  struct sigaction* original_handler = nullptr;
++  if (signal_number == SIGILL) {
++    original_handler = &original_sigill_handler_;
++  } else if (signal_number == SIGSEGV) {
++    original_handler = &original_sigsegv_handler_;
++  } else if (signal_number == SIGBUS) {
++    original_handler = &original_sigbus_handler_;
++  }
++  if (original_handler) {
++    if ((original_handler->sa_flags & SA_SIGINFO) && original_handler->sa_sigaction) {
++      original_handler->sa_sigaction(signal_number, signal_info, signal_context);
++      return;
++    }
++    if (original_handler->sa_handler == SIG_IGN) {
++      return;
++    }
++    if (original_handler->sa_handler != SIG_DFL && original_handler->sa_handler) {
++      original_handler->sa_handler(signal_number);
++      return;
++    }
++    sigaction(signal_number, original_handler, nullptr);
++  } else {
++    signal(signal_number, SIG_DFL);
++  }
++  raise(signal_number);
++  std::_Exit(128 + signal_number);
++}
++#endif
++
+ // This can be as large as needed, but isn't often needed.
+ // As we will be sometimes firing many exceptions we want to avoid having to
+ // scan the table too much or invoke many custom handlers.
+@@ -54,6 +125,8 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
+ #if REX_PLATFORM_MAC
+   // Darwin's mcontext_t is already a pointer (__darwin_mcontext64*); copy it.
+   mcontext_t mcontext = reinterpret_cast<ucontext_t*>(signal_context)->uc_mcontext;
++#elif REX_PLATFORM_PS5
++  Ps5MContext mcontext(signal_context);
+ #else
+   // Linux's mcontext_t is a large struct; bind by reference to avoid copying it
+   // inside the signal handler.
+@@ -171,7 +244,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
+       // On macOS, SIGBUS (KERN_PROTECTION_FAILURE) is raised for writes to
+       // read-protected pages — the same scenario that raises SIGSEGV on Linux.
+       // Fall through to treat it as an access violation.
+-#if !REX_PLATFORM_MAC
++#if !REX_PLATFORM_MAC && !REX_PLATFORM_PS5
+       // On non-Mac POSIX, SIGBUS is a bus error (misaligned access), not a
+       // protection fault — don't handle it here.
+       assert_unhandled_case(signal_number);
+@@ -417,6 +490,17 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
+       return;
+     }
+   }
++#if REX_PLATFORM_PS5
++  // [ps5 port] Nothing took it: the thread would re-execute the faulting
++  // instruction forever (a game stuck on a loading screen). Say where in the
++  // log, then let it end.
++  if (signal_number == SIGSEGV || signal_number == SIGBUS) {
++    rex::ps5diag::UnhandledHostFault(thread_context.rip,
++                                     reinterpret_cast<uintptr_t>(signal_info->si_addr),
++                                     thread_context.rsp);
++  }
++  DispatchUnhandledSignal(signal_number, signal_info, signal_context);
++#endif
+ }
+ 
+ void ExceptionHandler::Install(Handler fn, void* data) {
+@@ -433,7 +517,7 @@ void ExceptionHandler::Install(Handler fn, void* data) {
+     if (sigaction(SIGSEGV, &signal_handler, &original_sigsegv_handler_) != 0) {
+       assert_always("Failed to install new SIGSEGV handler");
+     }
+-#if REX_PLATFORM_MAC
++#if REX_PLATFORM_MAC || REX_PLATFORM_PS5
+     if (sigaction(SIGBUS, &signal_handler, &original_sigbus_handler_) != 0) {
+       assert_always("Failed to install new SIGBUS handler");
+     }
+@@ -478,7 +562,7 @@ void ExceptionHandler::Uninstall(Handler fn, void* data) {
+       if (sigaction(SIGSEGV, &original_sigsegv_handler_, NULL) != 0) {
+         assert_always("Failed to restore original SIGSEGV handler");
+       }
+-#if REX_PLATFORM_MAC
++#if REX_PLATFORM_MAC || REX_PLATFORM_PS5
+       if (sigaction(SIGBUS, &original_sigbus_handler_, NULL) != 0) {
+         assert_always("Failed to restore original SIGBUS handler");
+       }
+diff --git a/src/core/fiber_posix.cpp b/src/core/fiber_posix.cpp
+index 4fe1ca6f..67d3f4fd 100644
+--- a/src/core/fiber_posix.cpp
++++ b/src/core/fiber_posix.cpp
+@@ -23,10 +23,74 @@
+ 
+ #include <cassert>
+ 
++#if REX_PLATFORM_PS5
++// [ps5 port] The PS5's getcontext/makecontext/swapcontext don't switch (tested
++// on 13.60: 0 switches). An x86-64 switch of the callee-saved registers plus
++// MXCSR and the x87 control word, tested on the console (~0.03 us a round
++// trip). rex_fiber_switch(&from_sp, to_sp): pushes rbp rbx r12-r15 and an
++// 8-byte MXCSR/FCW slot, saves rsp, loads to_sp, pops the same frame, returns.
++extern "C" void rex_fiber_switch(void** from_sp, void* to_sp);
++__asm__(
++    ".text\n"
++    ".p2align 4\n"
++    ".globl rex_fiber_switch\n"
++    ".type rex_fiber_switch, @function\n"
++    "rex_fiber_switch:\n"
++    "  pushq %rbp\n  pushq %rbx\n  pushq %r12\n  pushq %r13\n  pushq %r14\n  pushq %r15\n"
++    "  subq $8, %rsp\n  stmxcsr (%rsp)\n  fnstcw 4(%rsp)\n"
++    "  movq %rsp, (%rdi)\n"
++    "  movq %rsi, %rsp\n"
++    "  ldmxcsr (%rsp)\n  fldcw 4(%rsp)\n  addq $8, %rsp\n"
++    "  popq %r15\n  popq %r14\n  popq %r13\n  popq %r12\n  popq %rbx\n  popq %rbp\n"
++    "  ret\n"
++    ".size rex_fiber_switch, .-rex_fiber_switch\n");
++#endif
++
+ namespace rex::thread {
+ 
+ thread_local Fiber* Fiber::tls_current_ = nullptr;
+ 
++#if REX_PLATFORM_PS5
++Fiber* Fiber::ConvertCurrentThread() {
++  auto* f = new Fiber();  // (its sp_ is set by the first switch away)
++  f->is_thread_fiber_ = true;
++  tls_current_ = f;
++  return f;
++}
++
++Fiber* Fiber::Create(size_t stack_size, void (*entry)(void*), void* arg) {
++  auto* f = new Fiber();
++  f->entry_ = entry;
++  f->arg_ = arg;
++  f->stack_.resize(stack_size);
++  uintptr_t top = (reinterpret_cast<uintptr_t>(f->stack_.data()) + stack_size) & ~uintptr_t(15);
++  // The frame rex_fiber_switch pops (x86-64): [mxcsr|fcw] r15 r14 r13 r12 rbx
++  // rbp, then the return address = Trampoline. The return slot sits on a
++  // 16-byte boundary so Trampoline starts with rsp % 16 == 8, as after a call.
++  auto* frame = reinterpret_cast<uint64_t*>(top - 16 - 7 * 8);
++  for (int i = 0; i < 7; ++i) frame[i] = 0;
++  uint32_t mxcsr;
++  uint16_t fcw;
++  __asm__ volatile("stmxcsr %0\n fnstcw %1" : "=m"(mxcsr), "=m"(fcw));
++  frame[0] = (uint64_t(fcw) << 32) | mxcsr;
++  frame[7] = reinterpret_cast<uint64_t>(&Fiber::Trampoline);
++  frame[8] = 0;
++  f->sp_ = frame;
++  return f;
++}
++
++/*static*/ void Fiber::Trampoline() {
++  Fiber* f = tls_current_;
++  f->entry_(f->arg_);
++  __builtin_trap();  // (a fiber's entry never returns)
++}
++
++void Fiber::SwitchTo(Fiber* target) {
++  Fiber* from = tls_current_;
++  tls_current_ = target;
++  rex_fiber_switch(&from->sp_, target->sp_);
++}
++#else
+ Fiber* Fiber::ConvertCurrentThread() {
+   auto* f = new Fiber();
+   if (getcontext(&f->context_) == -1) {
+@@ -68,6 +132,8 @@ void Fiber::SwitchTo(Fiber* target) {
+   swapcontext(&from->context_, &target->context_);
+ }
+ 
++#endif  // REX_PLATFORM_PS5
++
+ void Fiber::Destroy() {
+   // Thread fibers are destroyed from the owning thread itself.
+   if (is_thread_fiber_) {
+diff --git a/src/core/filesystem_posix.cpp b/src/core/filesystem_posix.cpp
+index ef5bdf4e..55daeaf3 100644
+--- a/src/core/filesystem_posix.cpp
++++ b/src/core/filesystem_posix.cpp
+@@ -91,6 +91,9 @@ std::filesystem::path GetExecutablePath() {
+   std::error_code ec;
+   std::filesystem::path canonical_path = std::filesystem::weakly_canonical(executable_path, ec);
+   return ec ? std::filesystem::path(executable_path) : canonical_path;
++#elif REX_PLATFORM_PS5
++  // [ps5 port] the app's folder (/data/homebrew/<title id>) is mounted at /app0.
++  return std::filesystem::path("/app0/eboot.bin");
+ #else
+   char buff[FILENAME_MAX] = "";
+   readlink("/proc/self/exe", buff, FILENAME_MAX);
+@@ -104,6 +107,11 @@ std::filesystem::path GetExecutableFolder() {
+ }
+ 
+ std::filesystem::path GetUserFolder() {
++#if REX_PLATFORM_PS5
++  // [ps5 port] No HOME and no passwd database (getpwuid_r finds nothing):
++  // user data lives in the app's own folder.
++  return std::filesystem::path("/app0/UserData");
++#endif
+   // get preferred data home
+   if (auto xdg = rex::platform::env::get("XDG_DATA_HOME")) {
+     return std::filesystem::path(*xdg);
+diff --git a/src/core/logging.cpp b/src/core/logging.cpp
+index 1645848c..c4cb3952 100644
+--- a/src/core/logging.cpp
++++ b/src/core/logging.cpp
+@@ -25,6 +25,10 @@
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+ #include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <rex/ps5_diag.h>
++#endif
++#include <rex/platform.h>
+ #include <rex/platform/env.h>
+ 
+ #if REX_PLATFORM_WIN32
+@@ -232,6 +236,9 @@ void InitLogging(const LogConfig& config) {
+     sink->set_level(spdlog::level::trace);
+     sink->set_pattern(config.file_pattern);
+     g_file_sink = sink;
++#if REX_PLATFORM_PS5
++    rex::ps5diag::SetLogPath(resolved_path.c_str());  // [ps5 port] where a crash line goes
++#endif
+   }
+ 
+   g_extra_sinks = config.extra_sinks;
+diff --git a/src/core/mapped_memory_posix.cpp b/src/core/mapped_memory_posix.cpp
+index 8ee8e34d..cc92ec5d 100644
+--- a/src/core/mapped_memory_posix.cpp
++++ b/src/core/mapped_memory_posix.cpp
+@@ -9,6 +9,9 @@
+  * @modified    Tom Clay & Rien Gupta, 2026 - Adapted for ReXGlue runtime (POSIX + macOS)
+  */
+ 
++#include <algorithm>
++#include <cerrno>
++#include <cstdlib>
+ #include <memory>
+ 
+ #include <fcntl.h>
+@@ -17,6 +20,7 @@
+ #include <unistd.h>
+ 
+ #include <rex/filesystem.h>
++#include <rex/logging.h>
+ #include <rex/memory/mapped_memory.h>
+ #include <rex/platform.h>
+ 
+@@ -37,6 +41,100 @@ using rex_off64_t = off64_t;
+ 
+ namespace rex::memory {
+ 
++#if REX_PLATFORM_PS5
++// [ps5 port] No file mappings on the PS5: paging a big file in through one
++// (an 8 GB disc image) froze the whole console. A "mapping" here is a copy
++// of the file's bytes in memory, written back on Flush/Close when writable.
++// (The disc image itself is never opened this way: DiscImageDevice reads it
++// with pread.)
++namespace {
++
++constexpr size_t kMaxFileCopy = size_t(512) << 20;
++
++bool ReadAll(int fd, uint8_t* p, size_t length, size_t offset) {
++  while (length) {
++    const ssize_t n = pread(fd, p, length, off_t(offset));
++    if (n < 0 && errno == EINTR) continue;
++    if (n <= 0) return false;
++    p += n, offset += size_t(n), length -= size_t(n);
++  }
++  return true;
++}
++
++bool WriteAll(int fd, const uint8_t* p, size_t length, size_t offset) {
++  while (length) {
++    const ssize_t n = pwrite(fd, p, length, off_t(offset));
++    if (n < 0 && errno == EINTR) continue;
++    if (n <= 0) return false;
++    p += n, offset += size_t(n), length -= size_t(n);
++  }
++  return true;
++}
++
++class Ps5FileCopy : public MappedMemory {
++ public:
++  Ps5FileCopy(void* data, size_t size, int fd, size_t offset, bool writable)
++      : MappedMemory(data, size), fd_(fd), offset_(offset), writable_(writable) {}
++  ~Ps5FileCopy() override { Close(0); }
++
++  void Close(uint64_t truncate_size) override {
++    if (data_) {
++      Flush();
++      std::free(data_);
++      data_ = nullptr;
++    }
++    if (fd_ >= 0) {
++      if (truncate_size) ftruncate(fd_, off_t(truncate_size));
++      close(fd_);
++      fd_ = -1;
++    }
++  }
++
++  void Flush() override {
++    if (writable_ && data_ && fd_ >= 0) WriteAll(fd_, data(), size(), offset_);
++  }
++
++ private:
++  int fd_;
++  size_t offset_;
++  bool writable_;
++};
++
++}  // namespace
++
++std::unique_ptr<MappedMemory> MappedMemory::Open(const std::filesystem::path& path, Mode mode,
++                                                 size_t offset, size_t length) {
++  const bool writable = mode == Mode::kReadWrite;
++  const int fd = open(path.c_str(), writable ? O_RDWR : O_RDONLY);
++  if (fd < 0) return nullptr;
++  size_t size = length;
++  if (!size) {
++    struct stat st {};
++    if (fstat(fd, &st) != 0 || size_t(st.st_size) < offset) {
++      close(fd);
++      return nullptr;
++    }
++    size = size_t(st.st_size) - offset;
++  }
++  if (size > kMaxFileCopy) {
++    REXLOG_WARN("ps5: {} is too big to load whole ({} MB)", path.string(), size >> 20);
++    close(fd);
++    return nullptr;
++  }
++  auto* data = static_cast<uint8_t*>(std::calloc(std::max<size_t>(size, 1), 1));
++  if (!data) {
++    close(fd);
++    return nullptr;
++  }
++  if (!ReadAll(fd, data, size, offset) && !length) {
++    std::free(data);
++    close(fd);
++    return nullptr;
++  }
++  return std::make_unique<Ps5FileCopy>(data, size, fd, offset, writable);
++}
++#endif  // REX_PLATFORM_PS5
++
+ class PosixMappedMemory : public MappedMemory {
+  public:
+   PosixMappedMemory(void* data, size_t size, int file_descriptor)
+@@ -103,6 +201,7 @@ class PosixMappedMemory : public MappedMemory {
+   int file_descriptor_;
+ };
+ 
++#if !REX_PLATFORM_PS5
+ std::unique_ptr<MappedMemory> MappedMemory::Open(const std::filesystem::path& path, Mode mode,
+                                                  size_t offset, size_t length) {
+   int open_flags = 0;
+@@ -120,6 +219,7 @@ std::unique_ptr<MappedMemory> MappedMemory::Open(const std::filesystem::path& pa
+   }
+   return PosixMappedMemory::WrapFileDescriptor(file_descriptor, mode, offset, length);
+ }
++#endif  // !REX_PLATFORM_PS5
+ 
+ #if REX_PLATFORM_ANDROID
+ std::unique_ptr<MappedMemory> MappedMemory::OpenForAndroidContentUri(const std::string_view uri,
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39c..a3276450 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -9,6 +9,11 @@
+  * @modified    Tom Clay & Rien Gupta, 2026 - Adapted for ReXGlue runtime (POSIX + macOS)
+  */
+ 
++#include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <atomic>
++#include <rex/ps5_diag.h>
++#endif
+ #include <cerrno>
+ #include <cstddef>
+ #include <cstdio>
+@@ -147,7 +152,7 @@ bool IsWritableExecutableMemorySupported() {
+ }
+ 
+ // TODO(tomc): this needs to go somewhere else. we should utilize the platform namespace more.
+-#if REX_PLATFORM_LINUX
++#if REX_PLATFORM_LINUX && !REX_PLATFORM_PS5  // [ps5 port] no /proc on the PS5
+ namespace {
+ 
+ struct LinuxMapEntry {
+@@ -235,7 +240,7 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
+ }
+ 
+ }  // namespace
+-#endif  // REX_PLATFORM_LINUX
++#endif  // REX_PLATFORM_LINUX && !REX_PLATFORM_PS5
+ 
+ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_type,
+                  PageAccess access) {
+@@ -276,6 +281,47 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+   }
+ #endif
+ 
++#if REX_PLATFORM_PS5
++  // [ps5 port] No MAP_FIXED_NOREPLACE: a MAP_FIXED anonymous mmap would
++  // replace the guest views (direct memory, mirrored) with private memory
++  // from the small flexible pool. Over an existing mapping, reserve and commit
++  // only change the protection; mmap is for ranges nothing maps yet.
++  if (base_address != nullptr &&
++      (allocation_type == AllocationType::kCommit || allocation_type == AllocationType::kReserve)) {
++    const int prot = allocation_type == AllocationType::kReserve ? PROT_NONE
++                                                                 : static_cast<int>(prot_requested);
++    if (mprotect(base_address, length, prot) == 0) {
++      return base_address;
++    }
++  }
++  // Inside the guest views, an anonymous MAP_FIXED mmap would silently swap a
++  // piece of the shared guest memory for private zeroed pages (wiping what was
++  // there and cutting it off from its mirrors). Only ever change protection
++  // there, over whole host pages.
++  {
++    const uintptr_t a = reinterpret_cast<uintptr_t>(base_address);
++    if (base_address && a >= rex::ps5diag::guest_arena_lo && a < rex::ps5diag::guest_arena_hi) {
++      const uintptr_t host_page = page_size();
++      const uintptr_t lo = a & ~(host_page - 1);
++      const uintptr_t hi = (a + length + host_page - 1) & ~(host_page - 1);
++      const int prot = allocation_type == AllocationType::kReserve ? PROT_NONE
++                                                                   : static_cast<int>(prot_requested);
++      static std::atomic<int> logged{0};
++      if (logged.fetch_add(1) < 16) {
++        REXLOG_WARN("ps5 memory: AllocFixed {:X}+{:X} type {} inside the guest views (errno {}): "
++                    "protect whole host pages instead of mmap",
++                    a, length, int(allocation_type), errno);
++      }
++      if (allocation_type == AllocationType::kReserve) {
++        return base_address;  // (already mapped: never take access away from neighbours)
++      }
++      if (mprotect(reinterpret_cast<void*>(lo), hi - lo, prot) == 0) {
++        return base_address;
++      }
++      return nullptr;
++    }
++  }
++#endif
+   int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+ #if REX_PLATFORM_MAC
+   if (access == PageAccess::kExecuteReadWrite || access == PageAccess::kExecuteReadOnly) {
+@@ -298,7 +344,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+   if (result != MAP_FAILED) {
+     return result;
+   }
+-#if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX
++#if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX && !REX_PLATFORM_PS5
+   // Handle EEXIST: address already has a mapping (e.g., from prior Reserve)
+   // This is the "commit on existing reservation" path
+   if (errno == EEXIST && base_address &&
+@@ -350,6 +396,10 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+     size_t old_region_length = 0;
+     QueryProtect(base_address, old_region_length, *out_old_access);
+   }
++#elif REX_PLATFORM_PS5
++  // [ps5 port] No /proc/self/maps and no trusted host query: the previous
++  // access is not reported (kNoAccess). The guest heaps keep their own page
++  // tables and answer from those (BaseHeap::Protect).
+ #elif REX_PLATFORM_LINUX
+   // NOTE(tomc): we may want to look at doing this differently. it should work for now
+   //             but there is a TOCTOU window between reading and changing.
+@@ -408,7 +458,9 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+     access_out = PageAccess::kNoAccess;
+   }
+   return true;
+-#elif !REX_PLATFORM_LINUX
++#elif !REX_PLATFORM_LINUX || REX_PLATFORM_PS5
++  // [ps5 port] also the PS5: callers treat "unknown" as "still protected" and
++  // take the slow, always-correct path (mmio_handler.cpp).
+   access_out = PageAccess::kNoAccess;
+   length = 0;
+   return false;
+@@ -474,7 +526,14 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+   }
+   oflag |= O_CREAT;
+   auto full_path = MakeShmName(path);
++#if REX_PLATFORM_PS5
++  // [ps5 port] An anonymous shared memory object. It comes from the title's
++  // small flexible pool, so the 4.5 GB guest mapping usually can't have one:
++  // Memory::MapViewsPs5 maps the guest in direct memory instead.
++  int ret = shm_open(SHM_ANON, oflag, 0600);
++#else
+   int ret = shm_open(full_path.c_str(), oflag, 0777);
++#endif
+   if (ret < 0) {
+     return kFileMappingHandleInvalid;
+   }
+diff --git a/src/core/mutex.cpp b/src/core/mutex.cpp
+index d639924c..7f325c0c 100644
+--- a/src/core/mutex.cpp
++++ b/src/core/mutex.cpp
+@@ -11,11 +11,40 @@
+ 
+ #include <rex/thread/mutex.h>
+ 
++#if defined(__PROSPERO__)
++#include <sched.h>
++#include <time.h>
++#endif
++
+ namespace rex::thread {
+ 
+-std::recursive_mutex& global_critical_region::mutex() {
+-  static std::recursive_mutex global_mutex;
+-  return global_mutex;
++global_mutex& global_critical_region::mutex() {
++  static global_mutex the_mutex;
++  return the_mutex;
++}
++
++#if defined(__PROSPERO__)
++// Contended: spin (the holder is usually out within a few microseconds),
++// then yield, then nap 50 us at a time.
++void global_recursive_mutex::LockSlow(uintptr_t self) {
++  for (uint32_t tries = 0;; ++tries) {
++    if (owner_.load(std::memory_order_relaxed) == 0) {
++      uintptr_t expected = 0;
++      if (owner_.compare_exchange_strong(expected, self, std::memory_order_acquire,
++                                         std::memory_order_relaxed)) {
++        return;
++      }
++    }
++    if (tries < 2000) {
++      __builtin_ia32_pause();
++    } else if (tries < 2200) {
++      sched_yield();
++    } else {
++      const timespec nap{0, 50000};
++      nanosleep(&nap, nullptr);
++    }
++  }
+ }
++#endif
+ 
+ }  // namespace rex::thread
+diff --git a/src/core/ps5_diag.cpp b/src/core/ps5_diag.cpp
+new file mode 100644
+index 00000000..0be66022
+--- /dev/null
++++ b/src/core/ps5_diag.cpp
+@@ -0,0 +1,241 @@
++// [ps5 port] see rex/ps5_diag.h
++#include <rex/ps5_diag.h>
++
++#if REX_PLATFORM_PS5
++
++#include <cstdio>
++#include <cstring>
++#include <mutex>
++#include <string>
++
++#include <fcntl.h>
++#include <pthread.h>
++#include <pthread_np.h>
++#include <signal.h>
++#include <unistd.h>
++
++#include <rex/chrono/clock.h>
++#include <rex/logging.h>
++
++namespace rex::ps5diag {
++
++std::atomic<uint64_t> counters[kCount];
++uintptr_t guest_arena_lo = 0, guest_arena_hi = 0;
++void (*crash_hook)(const char* what) = nullptr;
++void (*title_exit_hook)() = nullptr;
++std::atomic<uint64_t> crashed_at_ms{0};
++
++uint64_t NowMs() {
++  const uint64_t per_ms = rex::chrono::Clock::QueryHostTickFrequency() / 1000;
++  return per_ms ? rex::chrono::Clock::QueryHostTickCount() / per_ms : 0;
++}
++
++uintptr_t Anchor() { return reinterpret_cast<uintptr_t>(&NowMs); }
++
++namespace {
++
++struct ThreadEntry {
++  std::atomic<bool> used{false};
++  pthread_t pthread{};
++  int tid = 0;
++  uintptr_t stack_top = 0;
++  char what[24] = {};
++  // filled by the signal handler
++  std::atomic<bool> want_stack{false};
++  std::atomic<int> done{0};
++  uintptr_t rip = 0, rsp = 0;
++  uintptr_t words[64] = {};
++  int nwords = 0;
++};
++constexpr int kThreads = 192;
++ThreadEntry threads[kThreads];
++std::atomic<int> next_thread{0};
++thread_local ThreadEntry* my_entry = nullptr;
++
++// Words on a stack within this distance of the anchor are taken for return
++// addresses into the program (its text is under 256 MB).
++constexpr uintptr_t kNear = 256ull << 20;
++inline bool InProgram(uintptr_t v) {
++  const uintptr_t anchor = Anchor();
++  return v > (anchor > kNear ? anchor - kNear : 0x10000) && v < anchor + kNear;
++}
++
++// The PS5 kernel hands signal handlers the FreeBSD amd64 ucontext with 48
++// extra bytes in front: mcontext starts at +64 (exception_handler_posix.cpp),
++// rip in its slot 20 and rsp in slot 23.
++void SampleHandler(int, siginfo_t*, void* uc) {
++  ThreadEntry* e = my_entry;
++  if (!e || !e->want_stack.exchange(false, std::memory_order_acq_rel)) return;
++  auto* gregs = reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(uc) + 64);
++  e->rip = gregs[20];
++  e->rsp = gregs[23];
++  uintptr_t end = e->rsp + 64 * 1024;
++  if (e->stack_top && e->stack_top < end) end = e->stack_top;
++  int n = 0;
++  for (uintptr_t p = e->rsp & ~uintptr_t(7); p + 8 <= end && n < 64; p += 8) {
++    const uintptr_t v = *reinterpret_cast<uintptr_t*>(p);
++    if (InProgram(v)) e->words[n++] = v;
++  }
++  e->nwords = n;
++  e->done.store(1, std::memory_order_release);
++}
++
++void InstallSampleHandler() {
++  static std::once_flag once;
++  std::call_once(once, [] {
++    struct sigaction sa = {};
++    sa.sa_sigaction = SampleHandler;
++    sa.sa_flags = SA_SIGINFO | SA_RESTART;
++    sigemptyset(&sa.sa_mask);
++    sigaction(SIGPROF, &sa, nullptr);
++  });
++}
++
++char log_path[512];
++
++// Appends to a fixed buffer without the heap (the crash report runs in a
++// fault handler, possibly inside the allocator).
++struct RawLine {
++  char text[2048];
++  size_t size = 0;
++  void Add(const char* s) {
++    while (*s && size + 1 < sizeof(text)) text[size++] = *s++;
++  }
++  void Hex(uint64_t v) {
++    char digits[17];
++    int n = 0;
++    do {
++      digits[n++] = "0123456789ABCDEF"[v & 15];
++      v >>= 4;
++    } while (v);
++    while (n && size + 1 < sizeof(text)) text[size++] = digits[--n];
++  }
++  void Dec(uint64_t v) {
++    char digits[21];
++    int n = 0;
++    do {
++      digits[n++] = char('0' + v % 10);
++      v /= 10;
++    } while (v);
++    while (n && size + 1 < sizeof(text)) text[size++] = digits[--n];
++  }
++};
++
++}  // namespace
++
++void RegisterThread(const char* what) {
++  if (my_entry) return;
++  const int i = next_thread.fetch_add(1);
++  if (i >= kThreads) return;
++  ThreadEntry& e = threads[i];
++  e.pthread = pthread_self();
++  e.tid = pthread_getthreadid_np();
++  int marker = 0;
++  e.stack_top = reinterpret_cast<uintptr_t>(&marker) + 256;  // (a little above: the caller's frame)
++  std::strncpy(e.what, what ? what : "", sizeof(e.what) - 1);
++  my_entry = &e;
++  e.used.store(true, std::memory_order_release);
++}
++
++void UnregisterThread() {
++  ThreadEntry* e = my_entry;
++  if (!e) return;
++  // No more samples for it: its pthread_t can be another thread's soon, and a
++  // sample landing after its thread-specific data is gone would take a lookup
++  // that allocates in a signal handler.
++  sigset_t prof;
++  sigemptyset(&prof);
++  sigaddset(&prof, SIGPROF);
++  pthread_sigmask(SIG_BLOCK, &prof, nullptr);
++  e->used.store(false, std::memory_order_release);
++  my_entry = nullptr;
++}
++
++void SampleAllThreads() {
++  static std::mutex sampling;
++  std::lock_guard<std::mutex> one_at_a_time(sampling);
++  InstallSampleHandler();
++  REXLOG_INFO("ps5 stack: anchor {:X}", Anchor());
++  int count = next_thread.load();
++  if (count > kThreads) count = kThreads;
++  for (int i = 0; i < count; ++i) {
++    ThreadEntry& e = threads[i];
++    if (!e.used.load(std::memory_order_acquire)) continue;
++    e.done.store(0);
++    e.want_stack.store(true, std::memory_order_release);
++    if (pthread_kill(e.pthread, SIGPROF) != 0) continue;
++    for (int ms = 0; ms < 200 && !e.done.load(std::memory_order_acquire); ++ms) usleep(1000);
++    if (!e.done.load()) {
++      REXLOG_INFO("ps5 stack: tid {} {}: no answer", e.tid, e.what);
++      continue;
++    }
++    std::string line;
++    for (int k = 0; k < e.nwords; ++k) {
++      char buf[24];
++      std::snprintf(buf, sizeof(buf), " %lX", static_cast<unsigned long>(e.words[k] - Anchor() + 0x10000000));
++      line += buf;
++    }
++    REXLOG_INFO("ps5 stack: tid {} {}: rip {:X} |{}", e.tid, e.what, e.rip - Anchor() + 0x10000000, line);
++  }
++}
++
++void SetLogPath(const char* path) {
++  if (!path) return;
++  std::strncpy(log_path, path, sizeof(log_path) - 1);
++}
++
++void UnhandledHostFault(uintptr_t rip, uintptr_t address, uintptr_t rsp) {
++  static std::atomic<uint64_t> count{0};
++  const uint64_t n = ++count;
++  Add(kUnhandledFaults);
++  if (n > 1) {
++    // Again (it retries the instruction) or another thread: the first report
++    // ends the game.
++    if (n == 2 && crash_hook) crash_hook("a thread crashed");  // (doesn't return)
++    return;
++  }
++  uint64_t expected = 0;
++  crashed_at_ms.compare_exchange_strong(expected, NowMs() | 1);
++  const uintptr_t anchor = Anchor();
++  static RawLine line;
++  line.Add("\n[ps5 crash] thread ");
++  line.Dec(uint64_t(my_entry ? my_entry->tid : pthread_getthreadid_np()));
++  line.Add(" (");
++  line.Add(my_entry ? my_entry->what : "unregistered");
++  line.Add(") faulted at ");
++  line.Hex(address);
++  if (address >= guest_arena_lo && address < guest_arena_hi) {
++    line.Add(" (guest offset ");
++    line.Hex(address - guest_arena_lo);
++    line.Add(")");
++  }
++  line.Add(" (rip ");
++  line.Hex(rip);
++  line.Add(", anchor-relative ");
++  line.Hex(rip - anchor + 0x10000000);
++  line.Add(") | stack:");
++  if (ThreadEntry* e = my_entry) {
++    uintptr_t end = rsp + 64 * 1024;
++    if (e->stack_top && e->stack_top < end) end = e->stack_top;
++    int k = 0;
++    for (uintptr_t p = rsp & ~uintptr_t(7); p + 8 <= end && k < 48; p += 8) {
++      const uintptr_t v = *reinterpret_cast<uintptr_t*>(p);
++      if (InProgram(v)) {
++        line.Add(" ");
++        line.Hex(v - anchor + 0x10000000);
++        ++k;
++      }
++    }
++  }
++  line.Add("\n");
++  const char* path = log_path[0] ? log_path : "/data/homebrew/ds2_crash.log";
++  const int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0666);
++  if (fd >= 0) {
++    (void)write(fd, line.text, line.size);
++    close(fd);
++  }
++}
++
++}  // namespace rex::ps5diag
++
++#endif  // REX_PLATFORM_PS5
+diff --git a/src/core/ps5_libc_extras.c b/src/core/ps5_libc_extras.c
+new file mode 100644
+index 00000000..87f97fed
+--- /dev/null
++++ b/src/core/ps5_libc_extras.c
+@@ -0,0 +1,128 @@
++/**
++ * [ps5 port] Standard functions the PS5's libc doesn't export, used by the
++ * runtime (ffs: math_gcc.cpp; timegm: STFS timestamps) and SDL3 (getresuid /
++ * getresgid: its GTK loader, never used on the PS5). isatty / mkstemp: the
++ * PS5 only exports them from libScePosixForWebKit, which a game can't use
++ * (spdlog's isatty call jumped to address 0).
++ *
++ * From the GTA IV PS5 port (elripalda), where each was found on a console.
++ */
++#if defined(__PROSPERO__)
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <stdint.h>
++#include <sys/types.h>
++#include <time.h>
++#include <unistd.h>
++
++// Imports only the system's libkernel_sys exports, which a game can't load:
++// each one was a jump to address 0 (libc++'s create_hard_link called link()).
++// They fail cleanly instead, and every caller has a fallback.
++int link(const char* from, const char* to) {
++  (void)from, (void)to;
++  errno = ENOTSUP;
++  return -1;
++}
++int symlink(const char* target, const char* path) {
++  (void)target, (void)path;
++  errno = ENOTSUP;
++  return -1;
++}
++ssize_t readlink(const char* path, char* buf, size_t size) {
++  (void)path, (void)buf, (void)size;
++  errno = EINVAL;  // (not a symbolic link: there are none)
++  return -1;
++}
++long pathconf(const char* path, int name) {
++  (void)path;
++  switch (name) {
++    case _PC_NAME_MAX: return 255;
++    case _PC_PATH_MAX: return 1024;
++    case _PC_LINK_MAX: return 1;
++    default: errno = EINVAL; return -1;
++  }
++}
++pid_t fork(void) {
++  errno = ENOSYS;
++  return -1;
++}
++pid_t vfork(void) {
++  errno = ENOSYS;
++  return -1;
++}
++pid_t setsid(void) {
++  errno = EPERM;
++  return -1;
++}
++
++// No terminals on a PS5.
++int isatty(int fd) {
++  (void)fd;
++  errno = ENOTTY;
++  return 0;
++}
++
++// mkstemp: replace the trailing XXXXXX until a new file can be created.
++int mkstemp(char* path) {
++  static const char kChars[] = "abcdefghijklmnopqrstuvwxyz0123456789";
++  size_t length = path ? strlen(path) : 0;
++  if (length < 6 || strcmp(path + length - 6, "XXXXXX") != 0) {
++    errno = EINVAL;
++    return -1;
++  }
++  static uint64_t counter = 0;
++  for (int attempt = 0; attempt < 1000; ++attempt) {
++    uint64_t v = (uint64_t)time(NULL) * 2654435761u + (++counter) * 0x9E3779B97F4A7C15ull;
++    for (int i = 0; i < 6; ++i) {
++      path[length - 6 + i] = kChars[v % 36];
++      v /= 36;
++    }
++    int fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
++    if (fd >= 0 || errno != EEXIST) return fd;
++  }
++  errno = EEXIST;
++  return -1;
++}
++
++int ffs(int value) { return __builtin_ffs(value); }
++
++// UTC broken-down time to seconds since the epoch (days_from_civil, Howard
++// Hinnant's public-domain algorithm); normalizes like mktime does.
++time_t timegm(struct tm* tm) {
++  int64_t year = (int64_t)tm->tm_year + 1900;
++  int64_t month = tm->tm_mon;  // 0..11, may be out of range
++  year += month / 12;
++  month %= 12;
++  if (month < 0) {
++    month += 12;
++    --year;
++  }
++  int64_t m = month + 1;  // 1..12
++  int64_t y = year - (m <= 2);
++  int64_t era = (y >= 0 ? y : y - 399) / 400;
++  int64_t yoe = y - era * 400;
++  int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + tm->tm_mday - 1;
++  int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
++  int64_t days = era * 146097 + doe - 719468;
++  return (time_t)(days * 86400 + (int64_t)tm->tm_hour * 3600 + (int64_t)tm->tm_min * 60 +
++                  tm->tm_sec);
++}
++
++int getresuid(uid_t* ruid, uid_t* euid, uid_t* suid) {
++  uid_t u = getuid(), e = geteuid();
++  if (ruid) *ruid = u;
++  if (euid) *euid = e;
++  if (suid) *suid = e;
++  return 0;
++}
++
++int getresgid(gid_t* rgid, gid_t* egid, gid_t* sgid) {
++  gid_t g = getgid(), e = getegid();
++  if (rgid) *rgid = g;
++  if (egid) *egid = e;
++  if (sgid) *sgid = e;
++  return 0;
++}
++#endif
+diff --git a/src/core/system_posix.cpp b/src/core/system_posix.cpp
+index 1655695f..fdc3e46d 100644
+--- a/src/core/system_posix.cpp
++++ b/src/core/system_posix.cpp
+@@ -7,9 +7,15 @@
+  */
+ 
+ #include <cstdio>
++#include <cstring>
+ 
++#include <rex/platform.h>
+ #include <rex/system.h>
+ 
++#if REX_PLATFORM_PS5
++extern "C" int sceKernelSendNotificationRequest(int, void*, size_t, int);
++#endif
++
+ namespace rex {
+ 
+ // TODO(tomc): add linux support for showing a native message box
+@@ -28,6 +34,16 @@ void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message) {
+   }
+   std::fprintf(stderr, "[%s] %.*s\n", level, static_cast<int>(message.size()), message.data());
+   std::fflush(stderr);
++#if REX_PLATFORM_PS5
++  // [ps5 port] Nobody sees stderr on a PS5: a system notification instead.
++  struct {
++    char unused[45];
++    char text[3075];
++  } request;
++  std::memset(&request, 0, sizeof(request));
++  std::snprintf(request.text, sizeof(request.text), "%.*s", static_cast<int>(message.size()), message.data());
++  sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);
++#endif
+ }
+ 
+ }  // namespace rex
+diff --git a/src/core/threading.cpp b/src/core/threading.cpp
+index fd06c662..140a0042 100644
+--- a/src/core/threading.cpp
++++ b/src/core/threading.cpp
+@@ -23,6 +23,9 @@ uint32_t logical_processor_count() {
+   static uint32_t value = 0;
+   if (!value) {
+     value = std::thread::hardware_concurrency();
++#if REX_PLATFORM_PS5
++    if (!value) value = 8;  // [ps5 port] the PS5's eight cores, should the count be unknown
++#endif
+   }
+   return value;
+ }
+diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
+index bed1e59c..d953b3ea 100644
+--- a/src/core/threading_posix.cpp
++++ b/src/core/threading_posix.cpp
+@@ -66,7 +66,9 @@ uint32_t NxKernelPriority() {
+ 
+ #include <fcntl.h>
+ #endif
++#if !REX_PLATFORM_PS5  // [ps5 port] no Linux syscall numbers on the PS5
+ #include <sys/syscall.h>
++#endif
+ #include <sys/time.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -85,7 +87,78 @@ uint32_t NxKernelPriority() {
+ #include <rex/string.h>
+ #endif
+ 
+-#if REX_PLATFORM_LINUX
++#if REX_PLATFORM_PS5
++// [ps5 port] FreeBSD naming of the thread helpers the PS5 exports.
++#include <pthread_np.h>
++#include <rex/ps5_diag.h>
++static inline pid_t rex_ps5_system_tid() { return pid_t(pthread_getthreadid_np()); }
++
++// [ps5 port] Thread stacks in direct memory. libkernel takes a thread's stack
++// from the title's flexible memory (about 400 MiB in all), and every guest
++// thread asks for a 16 MiB host stack: around 20 of them and pthread_create
++// fails (the game's thread creation returned STATUS_NO_MEMORY). Direct memory
++// has gigabytes. A stack is kept for reuse once its thread has been joined.
++// (From the GTA IV PS5 port, where it was found on a console.)
++#include <ps5platform/shm.h>
++#include <mutex>
++#include <vector>
++namespace {
++struct Ps5Stack {
++  void* base = nullptr;  // the reservation: a guard, then the stack
++  size_t bytes = 0;      // the stack's size
++};
++constexpr size_t kPs5StackUnit = 64 * 1024;
++constexpr size_t kPs5StackGuard = 64 * 1024;
++std::mutex ps5_stack_mutex;
++std::vector<Ps5Stack>& Ps5StackCache() {
++  static auto* cache = new std::vector<Ps5Stack>();
++  return *cache;
++}
++bool Ps5StackAlloc(size_t bytes, Ps5Stack* out) {
++  bytes = (bytes + kPs5StackUnit - 1) & ~(kPs5StackUnit - 1);
++  {
++    std::lock_guard<std::mutex> lock(ps5_stack_mutex);
++    auto& cache = Ps5StackCache();
++    for (size_t i = 0; i < cache.size(); ++i) {
++      if (cache[i].bytes == bytes) {
++        *out = cache[i];
++        cache.erase(cache.begin() + i);
++        return true;
++      }
++    }
++  }
++  // A reserved range with an unmapped guard below the stack, and the stack a
++  // direct-memory object mapped into the rest of it.
++  void* base = nullptr;
++  if (ps5_vrange_reserve(bytes + kPs5StackGuard, nullptr, kPs5StackUnit, &base) != 0 || !base) {
++    return false;
++  }
++  struct ps5_shm shm = {};
++  if (ps5_shm_create(bytes, &shm) != 0) {
++    ps5_vrange_release(base, bytes + kPs5StackGuard);
++    return false;
++  }
++  void* view = nullptr;
++  if (ps5_shm_map(&shm, 0, bytes, static_cast<uint8_t*>(base) + kPs5StackGuard,
++                  PS5_SHM_READ | PS5_SHM_WRITE, PS5_SHM_FIXED, &view) != 0 ||
++      view != static_cast<uint8_t*>(base) + kPs5StackGuard) {
++    ps5_shm_destroy(&shm);
++    ps5_vrange_release(base, bytes + kPs5StackGuard);
++    return false;
++  }
++  out->base = base;
++  out->bytes = bytes;
++  return true;
++}
++void Ps5StackFree(const Ps5Stack& stack) {
++  if (!stack.base) return;
++  std::lock_guard<std::mutex> lock(ps5_stack_mutex);
++  Ps5StackCache().push_back(stack);
++}
++}  // namespace
++#endif
++
++#if REX_PLATFORM_LINUX && !REX_PLATFORM_PS5
+ // SIGEV_THREAD_ID in timer_create(...) is a Linux extension
+ #define REX_HAS_SIGEV_THREAD_ID 1
+ #ifdef __GLIBC__
+@@ -151,7 +224,7 @@ enum class SignalType {
+ };
+ 
+ int GetSystemSignal(SignalType num) {
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || REX_PLATFORM_PS5  // [ps5 port] no realtime signals on the PS5 either
+   // macOS has no realtime signals (SIGRTMIN..SIGRTMAX); map the runtime's
+   // signals onto the two user-defined signals.
+   switch (num) {
+@@ -171,7 +244,7 @@ int GetSystemSignal(SignalType num) {
+ }
+ 
+ SignalType GetSystemSignalType(int num) {
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || REX_PLATFORM_PS5
+   switch (num) {
+     case SIGUSR1:
+       return SignalType::kThreadSuspend;
+@@ -217,6 +290,8 @@ uint32_t current_thread_system_id() {
+ #elif REX_PLATFORM_NX
+   // N2: Horizon has no gettid; the nn::os thread id is the system id.
+   return static_cast<uint32_t>(nn::os::GetThreadId(nn::os::GetCurrentThread()));
++#elif REX_PLATFORM_PS5
++  return static_cast<uint32_t>(rex_ps5_system_tid());
+ #else
+   return static_cast<uint32_t>(syscall(SYS_gettid));
+ #endif
+@@ -313,7 +388,7 @@ static sem_t* RexCreateAnonymousSemaphore() {
+ class PosixConditionBase {
+  public:
+   PosixConditionBase() {
+-#if REX_PLATFORM_LINUX
++#if REX_PLATFORM_LINUX && !REX_PLATFORM_PS5  // [ps5 port] the PS5 has no robust mutexes
+     // Use robust mutexes so waits can recover if owner thread terminates.
+     pthread_mutexattr_t attr;
+     if (pthread_mutexattr_init(&attr) == 0) {
+@@ -333,7 +408,7 @@ class PosixConditionBase {
+   WaitResult Wait(std::chrono::milliseconds timeout) {
+     bool executed;
+     auto predicate = [this] { return this->signaled(); };
+-#if REX_PLATFORM_LINUX
++#if REX_PLATFORM_LINUX && !REX_PLATFORM_PS5
+     auto native_mutex = static_cast<pthread_mutex_t*>(mutex_.native_handle());
+     int lock_result = pthread_mutex_lock(native_mutex);
+     if (lock_result == EOWNERDEAD) {
+@@ -387,7 +462,7 @@ class PosixConditionBase {
+       locks.reserve(handles.size());
+ 
+       for (size_t i = 0; i < handles.size(); ++i) {
+-#if REX_PLATFORM_LINUX
++#if REX_PLATFORM_LINUX && !REX_PLATFORM_PS5
+         auto native_mutex = static_cast<pthread_mutex_t*>(handles[i]->mutex_.native_handle());
+         int result = pthread_mutex_trylock(native_mutex);
+         if (result == 0 || result == EOWNERDEAD) {
+@@ -694,11 +769,27 @@ class PosixCondition<Thread> : public PosixConditionBase {
+     pthread_attr_t attr;
+     if (pthread_attr_init(&attr) != 0)
+       return false;
++#if REX_PLATFORM_PS5
++    if (params.stack_size > 2 * 1024 * 1024 && Ps5StackAlloc(params.stack_size, &ps5_stack_)) {
++      if (pthread_attr_setstack(&attr, static_cast<uint8_t*>(ps5_stack_.base) + kPs5StackGuard,
++                                ps5_stack_.bytes) != 0) {
++        Ps5StackFree(ps5_stack_);
++        ps5_stack_ = {};
++      }
++    }
++    if (!ps5_stack_.base && pthread_attr_setstacksize(&attr, params.stack_size) != 0) {
++      pthread_attr_destroy(&attr);
++      return false;
++    }
++#else
+     if (pthread_attr_setstacksize(&attr, params.stack_size) != 0) {
+       pthread_attr_destroy(&attr);
+       return false;
+     }
+-    if (params.initial_priority != 0 && !REX_PLATFORM_NX) {  // N2: no SCHED_FIFO on Horizon
++#endif
++    // [ps5 port] nor on the PS5: its priorities run 256 (highest) to 767 and
++    // SCHED_FIFO with Linux's values means nothing sensible there.
++    if (params.initial_priority != 0 && !REX_PLATFORM_NX && !REX_PLATFORM_PS5) {  // N2: no SCHED_FIFO on Horizon
+       sched_param sched{};
+       sched.sched_priority = params.initial_priority + 1;
+       if (pthread_attr_setschedpolicy(&attr, SCHED_FIFO) != 0) {
+@@ -710,7 +801,15 @@ class PosixCondition<Thread> : public PosixConditionBase {
+         return false;
+       }
+     }
+-    if (pthread_create(&thread_, &attr, ThreadStartRoutine, start_data) != 0) {
++    if (int err = pthread_create(&thread_, &attr, ThreadStartRoutine, start_data); err != 0) {
++#if REX_PLATFORM_PS5
++      REXLOG_ERROR("ps5: pthread_create failed: error {} (stack {} KB, {})", err, params.stack_size / 1024,
++                   ps5_stack_.base ? "direct memory" : "libkernel's");
++      Ps5StackFree(ps5_stack_);
++      ps5_stack_ = {};
++#else
++      (void)err;
++#endif
+       pthread_attr_destroy(&attr);
+       return false;
+     }
+@@ -726,6 +825,10 @@ class PosixCondition<Thread> : public PosixConditionBase {
+         exit_code_(0),
+         state_(State::kRunning),
+         suspend_count_(0) {
++#if REX_PLATFORM_PS5
++    // (made on the thread it stands for: Thread::GetCurrentThread())
++    if (pthread_equal(thread, pthread_self())) tid_.store(rex_ps5_system_tid(), std::memory_order_release);
++#endif
+ #if defined(__APPLE__)
+     suspend_sem_ = RexCreateAnonymousSemaphore();
+ #else
+@@ -761,6 +864,8 @@ class PosixCondition<Thread> : public PosixConditionBase {
+         std::lock_guard<std::mutex> lock(android_pre_api_26_name_mutex_);
+         rex::string::copy_truncating(result.data(), android_pre_api_26_name_, result.size());
+       }
++#elif REX_PLATFORM_PS5
++      pthread_get_name_np(thread_, result.data(), result.size() - 1);
+ #else
+       if (pthread_getname_np(thread_, result.data(), result.size() - 1) != 0) {
+         assert_always();
+@@ -779,6 +884,8 @@ class PosixCondition<Thread> : public PosixConditionBase {
+       if (pthread_equal(thread_, pthread_self())) {
+         pthread_setname_np(std::string(name).c_str());
+       }
++#elif REX_PLATFORM_PS5
++      pthread_set_name_np(thread_, std::string(name).c_str());
+ #else
+       pthread_setname_np(thread_, std::string(name).c_str());
+ #endif
+@@ -810,13 +917,16 @@ class PosixCondition<Thread> : public PosixConditionBase {
+ 
+ #if defined(__APPLE__)
+   uint32_t system_id() const { return static_cast<uint32_t>(pthread_mach_thread_np(thread_)); }
++#elif REX_PLATFORM_PS5
++  // [ps5 port] pthread_t is a pointer here: the id the thread recorded when it started
++  uint32_t system_id() const { return static_cast<uint32_t>(tid_.load(std::memory_order_acquire)); }
+ #else
+   uint32_t system_id() const { return static_cast<uint32_t>(thread_); }
+ #endif
+ 
+   uint64_t affinity_mask() {
+     WaitStarted();
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || REX_PLATFORM_PS5  // [ps5 port] the same on the PS5
+     // macOS doesn't expose Linux-style pthread affinity masks; report every
+     // logical processor as available.
+     auto cpu_count = std::min<uint32_t>(logical_processor_count(), 64);
+@@ -847,7 +957,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
+ 
+   void set_affinity_mask(uint64_t mask) {
+     WaitStarted();
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || REX_PLATFORM_PS5  // [ps5 port] leave scheduling to the PS5
+     // macOS doesn't expose Linux-style pthread affinity masks; keep this a
+     // no-op so higher layers can build and run.
+     (void)mask;
+@@ -885,8 +995,10 @@ class PosixCondition<Thread> : public PosixConditionBase {
+ 
+   void set_priority(int new_priority) {
+     WaitStarted();
+-#if REX_PLATFORM_NX
+-    (void)new_priority;  // N2: one priority for every host thread on Horizon (see ThreadStartRoutine)
++#if REX_PLATFORM_NX || REX_PLATFORM_PS5
++    // N2: one priority for every host thread on Horizon (see ThreadStartRoutine)
++    // [ps5 port] and on the PS5: every thread at the system's default.
++    (void)new_priority;
+     return;
+ #endif
+     sched_param param{};
+@@ -924,7 +1036,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
+       return;
+     }
+ 
+-#if defined(__APPLE__) || REX_PLATFORM_NX
++#if defined(__APPLE__) || REX_PLATFORM_NX || REX_PLATFORM_PS5
+     // macOS has no sigqueue/pthread_sigqueue; pthread_kill delivers the signal
+     // without the sigval payload.
+     int result = pthread_kill(thread_, GetSystemSignal(SignalType::kThreadUserCallback));
+@@ -1037,6 +1149,9 @@ class PosixCondition<Thread> : public PosixConditionBase {
+       cond_.notify_all();
+     }
+     if (is_current_thread) {
++#if REX_PLATFORM_PS5
++      rex::ps5diag::UnregisterThread();
++#endif
+       pthread_exit(reinterpret_cast<void*>(exit_code));
+     } else {
+ #if REX_PLATFORM_ANDROID
+@@ -1071,7 +1186,14 @@ class PosixCondition<Thread> : public PosixConditionBase {
+   inline bool signaled() const override { return signaled_; }
+   inline void post_execution() override {
+     if (thread_) {
++#if REX_PLATFORM_PS5
++      if (pthread_join(thread_, nullptr) == 0) {
++        Ps5StackFree(ps5_stack_);  // (the thread is gone: its stack can serve another)
++        ps5_stack_ = {};
++      }
++#else
+       pthread_join(thread_, nullptr);
++#endif
+     }
+ #if defined(__APPLE__)
+     if (suspend_sem_ != SEM_FAILED) {
+@@ -1085,6 +1207,11 @@ class PosixCondition<Thread> : public PosixConditionBase {
+   pthread_t thread_;
+ #if REX_PLATFORM_NX
+   nn::os::ThreadType* nn_thread_ = nullptr;  // N4: set by ThreadStartRoutine before start is published
++#endif
++#if REX_PLATFORM_PS5
++  Ps5Stack ps5_stack_;
++  // The kernel's id for the thread, recorded by the thread itself.
++  std::atomic<pid_t> tid_{0};
+ #endif
+   bool signaled_;
+   int exit_code_;
+@@ -1481,6 +1608,10 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
+ 
+   current_thread_ = thread;
+   current_thread_condition_ = &thread->handle_;
++#if REX_PLATFORM_PS5
++  thread->handle_.tid_.store(rex_ps5_system_tid(), std::memory_order_release);
++  rex::ps5diag::RegisterThread("rex");
++#endif
+ #if REX_PLATFORM_NX
+   thread->handle_.nn_thread_ = nn::os::GetCurrentThread();
+   if (NxPrioEnabled()) {
+@@ -1515,6 +1646,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
+   }
+ 
+   start_routine();
++#if REX_PLATFORM_PS5
++  rex::ps5diag::UnregisterThread();
++#endif
+ 
+   {
+     std::unique_lock<std::mutex> lock(thread->handle_.state_mutex_);
+@@ -1588,6 +1722,8 @@ void Thread::Exit(int exit_code) {
+ void set_current_thread_name(const std::string_view name) {
+ #if defined(__APPLE__)
+   pthread_setname_np(std::string(name).c_str());
++#elif REX_PLATFORM_PS5
++  pthread_set_name_np(pthread_self(), std::string(name).c_str());
+ #else
+   pthread_setname_np(pthread_self(), std::string(name).c_str());
+ #endif
+diff --git a/src/filesystem/devices/disc_image_device.cpp b/src/filesystem/devices/disc_image_device.cpp
+index 78dd2dd2..ea1fc5ed 100644
+--- a/src/filesystem/devices/disc_image_device.cpp
++++ b/src/filesystem/devices/disc_image_device.cpp
+@@ -12,6 +12,14 @@
+ #include <rex/filesystem/devices/disc_image_device.h>
+ #include <rex/filesystem/devices/disc_image_entry.h>
+ 
++#include <cstring>
++#include <vector>
++
++#include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <rex/filesystem/direct_io.h>
++#endif
++
+ #include <rex/literals.h>
+ #include <rex/logging.h>
+ #include <rex/math.h>
+@@ -30,11 +38,49 @@ DiscImageDevice::DiscImageDevice(const std::string_view mount_path,
+ DiscImageDevice::~DiscImageDevice() = default;
+ 
+ bool DiscImageDevice::Initialize() {
++#if REX_PLATFORM_PS5
++  // [ps5 port] The image is read with pread, not mapped (paging an 8 GB disc
++  // image in through a file mapping froze the whole console), and past the
++  // file cache (rex/filesystem/direct_io.h).
++  reader_ = std::make_unique<direct::Reader>();
++  if (!reader_->Open(host_path_.c_str())) {
++    REXFS_ERROR("Disc image could not be opened");
++    return false;
++  }
++  host_size_ = size_t(reader_->size());
++  REXFS_INFO("Disc image {}: {} bytes, read {}", host_path_.string(), host_size_,
++             reader_->direct() ? "past the cache" : "through the cache");
++
++  ParseState state = {};
++  state.ptr = nullptr;
++  state.size = host_size_;
++  auto result = Verify(&state);
++  if (result != Error::kSuccess) {
++    REXFS_ERROR("Failed to verify disc image header: {}", static_cast<int>(result));
++    return false;
++  }
++  if (state.root_offset > state.size || state.root_size > state.size - state.root_offset) {
++    REXFS_ERROR("Disc image root directory is outside the image");
++    return false;
++  }
++  std::vector<uint8_t> root(state.root_size);
++  if (!ReadAt(state.root_offset, root.data(), root.size())) {
++    REXFS_ERROR("Disc image root directory read failed");
++    return false;
++  }
++  result = ReadAllEntries(&state, root.data());
++  if (result != Error::kSuccess) {
++    REXFS_ERROR("Failed to read all GDFX entries: {}", static_cast<int>(result));
++    return false;
++  }
++  return true;
++#else
+   mmap_ = memory::MappedMemory::Open(host_path_, memory::MappedMemory::Mode::kRead);
+   if (!mmap_) {
+     REXFS_ERROR("Disc image could not be mapped");
+     return false;
+   }
++  host_size_ = mmap_->size();
+ 
+   ParseState state = {};
+   state.ptr = mmap_->data();
+@@ -59,6 +105,24 @@ bool DiscImageDevice::Initialize() {
+   }
+ 
+   return true;
++#endif  // REX_PLATFORM_PS5
++}
++
++bool DiscImageDevice::ReadAt(size_t offset, void* out, size_t length) const {
++  if (offset > host_size_ || length > host_size_ - offset) {
++    return false;
++  }
++#if REX_PLATFORM_PS5
++  return reader_->ReadAt(offset, out, length);
++#else
++#if REX_PLATFORM_NX
++  if (!mmap_->Prefetch(offset, length)) {
++    return false;
++  }
++#endif
++  std::memcpy(out, mmap_->data() + offset, length);
++  return true;
++#endif
+ }
+ 
+ void DiscImageDevice::Dump(string::StringBuffer* string_buffer) {
+@@ -105,7 +169,15 @@ DiscImageDevice::Error DiscImageDevice::Verify(ParseState* state) {
+     return Error::kErrorReadError;
+   }
+ #endif
++#if REX_PLATFORM_PS5
++  uint8_t descriptor[28];
++  if (!ReadAt(state->game_offset + (32 * kXESectorSize), descriptor, sizeof(descriptor))) {
++    return Error::kErrorReadError;
++  }
++  const uint8_t* fs_ptr = descriptor;
++#else
+   uint8_t* fs_ptr = state->ptr + state->game_offset + (32 * kXESectorSize);
++#endif
+   state->root_sector = memory::load<uint32_t>(fs_ptr + 20);
+   state->root_size = memory::load<uint32_t>(fs_ptr + 24);
+   state->root_offset = state->game_offset + (state->root_sector * kXESectorSize);
+@@ -133,7 +205,12 @@ bool DiscImageDevice::VerifyMagic(ParseState* state, size_t offset) {
+ #endif
+ 
+   // Simple check to see if the given offset contains the magic value.
++#if REX_PLATFORM_PS5
++  uint8_t magic[20];
++  return ReadAt(offset, magic, sizeof(magic)) && std::memcmp(magic, "MICROSOFT*XBOX*MEDIA", 20) == 0;
++#else
+   return std::memcmp(state->ptr + offset, "MICROSOFT*XBOX*MEDIA", 20) == 0;
++#endif
+ }
+ 
+ DiscImageDevice::Error DiscImageDevice::ReadAllEntries(ParseState* state,
+@@ -193,7 +270,15 @@ bool DiscImageDevice::ReadEntry(ParseState* state, const uint8_t* buffer, uint16
+         return false;
+       }
+ #endif
++#if REX_PLATFORM_PS5
++      std::vector<uint8_t> folder(length);
++      if (!ReadAt(state->game_offset + (sector * kXESectorSize), folder.data(), length)) {
++        return false;
++      }
++      const uint8_t* folder_ptr = folder.data();
++#else
+       uint8_t* folder_ptr = state->ptr + state->game_offset + (sector * kXESectorSize);
++#endif
+       if (!ReadEntry(state, folder_ptr, 0, entry.get())) {
+         return false;
+       }
+diff --git a/src/filesystem/devices/disc_image_entry.cpp b/src/filesystem/devices/disc_image_entry.cpp
+index 3ae4c126..8500aa2a 100644
+--- a/src/filesystem/devices/disc_image_entry.cpp
++++ b/src/filesystem/devices/disc_image_entry.cpp
+@@ -13,7 +13,9 @@
+ #include <rex/filesystem/devices/disc_image_file.h>
+ 
+ #include <algorithm>
++#include <vector>
+ 
++#include <rex/filesystem/devices/disc_image_device.h>
+ #include <rex/math.h>
+ 
+ namespace rex::filesystem {
+@@ -46,6 +48,28 @@ std::unique_ptr<memory::MappedMemory> DiscImageEntry::OpenMapped(memory::MappedM
+ 
+   size_t real_offset = data_offset_ + offset;
+   size_t real_length = length ? std::min(length, data_size_) : data_size_;
++#if REX_PLATFORM_PS5
++  // [ps5 port] No mapping of the image: the bytes, read into memory.
++  class Copy final : public memory::MappedMemory {
++   public:
++    explicit Copy(size_t n) : bytes_(n) {
++      data_ = bytes_.data();
++      size_ = n;
++    }
++
++   private:
++    std::vector<uint8_t> bytes_;
++  };
++  if (offset > data_size_) {
++    return nullptr;
++  }
++  real_length = std::min(real_length, data_size_ - offset);
++  auto copy = std::make_unique<Copy>(real_length);
++  if (!static_cast<DiscImageDevice*>(device())->ReadAt(real_offset, copy->data(), real_length)) {
++    return nullptr;
++  }
++  return copy;
++#endif
+ #if REX_PLATFORM_NX
+   // N2: the NX disc image is a lazily-read region; fetch the bytes before touching them.
+   if (!mmap_->Prefetch(real_offset, real_length)) {
+diff --git a/src/filesystem/devices/disc_image_file.cpp b/src/filesystem/devices/disc_image_file.cpp
+index c5516b5d..1c792b0d 100644
+--- a/src/filesystem/devices/disc_image_file.cpp
++++ b/src/filesystem/devices/disc_image_file.cpp
+@@ -14,6 +14,8 @@
+ 
+ #include <algorithm>
+ 
++#include <rex/filesystem/devices/disc_image_device.h>
++
+ namespace rex::filesystem {
+ 
+ DiscImageFile::DiscImageFile(uint32_t file_access, DiscImageEntry* entry)
+@@ -32,6 +34,15 @@ X_STATUS DiscImageFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
+   }
+   size_t real_offset = entry_->data_offset() + byte_offset;
+   size_t real_length = std::min(buffer.size(), entry_->data_size() - byte_offset);
++#if REX_PLATFORM_PS5
++  // [ps5 port] the image is read with pread, never mapped
++  if (!static_cast<DiscImageDevice*>(entry_->device())->ReadAt(real_offset, buffer.data(), real_length)) {
++    *out_bytes_read = 0;
++    return X_STATUS_UNSUCCESSFUL;
++  }
++  *out_bytes_read = real_length;
++  return X_STATUS_SUCCESS;
++#endif
+ #if REX_PLATFORM_NX
+   // N2: the NX disc image is a lazily-read region; fetch the bytes before touching them.
+   if (!entry_->mmap()->Prefetch(real_offset, real_length)) {
+diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
+index 0d8f8af0..e75b77f4 100644
+--- a/src/graphics/CMakeLists.txt
++++ b/src/graphics/CMakeLists.txt
+@@ -96,7 +96,14 @@ if(REXGLUE_USE_D3D12)
+         ${REXGPU_XENOS_D3D12_SOURCES})
+ endif()
+ 
+-add_library(rexgpu-xenos SHARED ${REXGPU_XENOS_SOURCES})
++# [ps5 port] The PS5 has no shared libraries of our own: the Xenos backend is
++# a static library linked into the program, and gpu_plugin_loader.cpp calls
++# its rex_gpu_create directly.
++if(PS5)
++    add_library(rexgpu-xenos STATIC ${REXGPU_XENOS_SOURCES})
++else()
++    add_library(rexgpu-xenos SHARED ${REXGPU_XENOS_SOURCES})
++endif()
+ add_library(rex::gpu-xenos ALIAS rexgpu-xenos)
+ 
+ set_target_properties(rexgpu-xenos PROPERTIES
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index 2266c728..dd156125 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/ps5_diag.h>
+ #include <algorithm>
+ #include <cinttypes>
+ #include <cmath>
+@@ -258,6 +259,7 @@ void CommandProcessor::WorkerThreadMain() {
+     assert_true(read_ptr_index_ != write_ptr_index);
+ 
+     // Execute. Note that we handle wraparound transparently.
++    rex::ps5diag::Add(rex::ps5diag::kPrimaryBuffers);
+     read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+ 
+     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
+@@ -347,6 +349,7 @@ void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_s
+ }
+ 
+ void CommandProcessor::UpdateWritePointer(uint32_t value) {
++  rex::ps5diag::Add(rex::ps5diag::kWritePointer);
+   write_ptr_index_ = value;
+   write_ptr_index_event_->Set();
+ }
+diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
+index 8f2fcb0b..d95eff1d 100644
+--- a/src/graphics/graphics_system.cpp
++++ b/src/graphics/graphics_system.cpp
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include <rex/graphics/graphics_system.h>
++#include <rex/ps5_diag.h>
+ 
+ #include <algorithm>
+ #include <cctype>
+@@ -298,6 +299,7 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
+   if (!interrupt_callback_) {
+     return;
+   }
++  rex::ps5diag::Add(rex::ps5diag::kInterrupts);
+ 
+   auto thread = system::XThread::GetCurrentThread();
+   assert_not_null(thread);
+@@ -320,6 +322,7 @@ void GraphicsSystem::MarkVblank() {
+   // TODO: Enable profiling once ported
+   // SCOPE_profile_cpu_f("gpu");
+ 
++  rex::ps5diag::Add(rex::ps5diag::kVblanks);
+   // Increment vblank counter (so the game sees us making progress).
+   if (command_processor_) {
+     command_processor_->increment_counter();
+diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
+index 76f5600c..989fc100 100644
+--- a/src/graphics/pipeline/texture/cache.cpp
++++ b/src/graphics/pipeline/texture/cache.cpp
+@@ -687,7 +687,7 @@ TextureCache::Texture::~Texture() {
+ }
+ 
+ void TextureCache::Texture::MakeUpToDateAndWatch(
+-    const std::unique_lock<std::recursive_mutex>& global_lock) {
++    const rex::thread::global_lock_t& global_lock) {
+   SharedMemory& shared_memory = texture_cache().shared_memory();
+   if (base_outdated_) {
+     assert_not_zero(GetGuestBaseSize());
+@@ -733,7 +733,7 @@ void TextureCache::Texture::MarkAsUsed() {
+ }
+ 
+ void TextureCache::Texture::WatchCallback(
+-    [[maybe_unused]] const std::unique_lock<std::recursive_mutex>& global_lock, bool is_mip) {
++    [[maybe_unused]] const rex::thread::global_lock_t& global_lock, bool is_mip) {
+   if (is_mip) {
+     assert_not_zero(GetGuestMipsSize());
+     mips_outdated_ = true;
+@@ -747,7 +747,7 @@ void TextureCache::Texture::WatchCallback(
+   }
+ }
+ 
+-void TextureCache::WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock,
++void TextureCache::WatchCallback(const rex::thread::global_lock_t& global_lock,
+                                  void* context, void* data, uint64_t argument,
+                                  bool invalidated_by_gpu) {
+   Texture& texture = *static_cast<Texture*>(context);
+@@ -1064,7 +1064,7 @@ bool TextureCache::IsRangeScaledResolved(uint32_t start_unscaled, uint32_t lengt
+ }
+ 
+ void TextureCache::ScaledResolveGlobalWatchCallbackThunk(
+-    const std::unique_lock<std::recursive_mutex>& global_lock, void* context,
++    const rex::thread::global_lock_t& global_lock, void* context,
+     uint32_t address_first, uint32_t address_last, bool invalidated_by_gpu) {
+   TextureCache* texture_cache = reinterpret_cast<TextureCache*>(context);
+   texture_cache->ScaledResolveGlobalWatchCallback(global_lock, address_first, address_last,
+@@ -1072,7 +1072,7 @@ void TextureCache::ScaledResolveGlobalWatchCallbackThunk(
+ }
+ 
+ void TextureCache::ScaledResolveGlobalWatchCallback(
+-    const std::unique_lock<std::recursive_mutex>& global_lock, uint32_t address_first,
++    const rex::thread::global_lock_t& global_lock, uint32_t address_first,
+     uint32_t address_last, bool invalidated_by_gpu) {
+   assert_true(IsDrawResolutionScaled());
+   if (invalidated_by_gpu) {
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 6207c1c6..f53c24eb 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/ps5_diag.h>
+ #include <algorithm>
+ #include <array>
+ #include <chrono>
+@@ -2276,6 +2277,7 @@ void VulkanCommandProcessor::OnGammaRampPWLValueWritten() {
+ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
+                                        uint32_t frontbuffer_height) {
+   SCOPE_profile_cpu_f("gpu");
++  rex::ps5diag::Add(rex::ps5diag::kSwaps);
+   vertex_buffers_in_sync_[0] = 0;
+   vertex_buffers_in_sync_[1] = 0;
+ 
+diff --git a/src/input/CMakeLists.txt b/src/input/CMakeLists.txt
+index 3ea35358..ecc92087 100644
+--- a/src/input/CMakeLists.txt
++++ b/src/input/CMakeLists.txt
+@@ -29,7 +29,11 @@ target_include_directories(rexinput PUBLIC
+     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+ )
+-if(WIN32)
++if(PS5)
++    # [ps5 port] DualSense through scePad (SDL has no PS5 controller backend;
++    # its driver still builds, unused).
++    target_sources(rexinput PRIVATE ps5/ps5_input_driver.cpp sdl/sdl_input_driver.cpp)
++elseif(WIN32)
+     target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp xinput/xinput_input_driver.cpp)
+ else()
+     target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp)
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index 1788dd6c..8f47c8a7 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -23,6 +23,10 @@
+ #include <rex/input/state_merge.h>
+ #include <rex/input/xinput/xinput_input_driver.h>
+ #include <rex/logging.h>
++#include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <rex/input/ps5/ps5_input_driver.h>
++#endif
+ 
+ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput")
+     .allowed({"sdl", "xinput"});
+@@ -342,7 +346,16 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
+     }
+ #endif
+ 
+-#if !REX_PLATFORM_NX  // N2: no SDL on Horizon; the NOP driver below is the NX input until nn::hid lands
++#if REX_PLATFORM_PS5
++    // [ps5 port] DualSense pads through scePad; SDL has no PS5 controller
++    // backend, and there is no keyboard or mouse to emulate a pad with.
++    {
++      auto ps5_driver = ps5::CreatePs5InputDriver();
++      if (ps5_driver && ps5_driver->Setup() == X_STATUS_SUCCESS) {
++        input->AddDriver(std::move(ps5_driver));
++      }
++    }
++#elif !REX_PLATFORM_NX  // N2: no SDL on Horizon; the NOP driver below is the NX input until nn::hid lands
+     if (REXCVAR_GET(input_backend) == "sdl") {
+       auto sdl_driver = std::make_unique<sdl::SDLInputDriver>(nullptr, 0);
+       if (sdl_driver->Setup() == X_STATUS_SUCCESS) {
+@@ -360,11 +373,13 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
+     }
+ #endif
+ 
++#if !REX_PLATFORM_PS5
+     // MnK driver (keyboard/mouse -> controller emulation)
+     auto mnk_driver = std::make_unique<mnk::MnkInputDriver>(nullptr, 0);
+     if (mnk_driver->Setup() == X_STATUS_SUCCESS) {
+       input->AddDriver(std::move(mnk_driver));
+     }
++#endif
+   }
+ 
+   // NOP driver (primary in tool mode, fallback otherwise)
+diff --git a/src/input/ps5/ps5_input_driver.cpp b/src/input/ps5/ps5_input_driver.cpp
+new file mode 100644
+index 00000000..1c8c85b9
+--- /dev/null
++++ b/src/input/ps5/ps5_input_driver.cpp
+@@ -0,0 +1,300 @@
++/**
++ * [ps5 port] DualSense input via scePad (the ScePadData layout verified on
++ * hardware by Nazky's ps5-plume-triangle; the driver after the GTA IV PS5
++ * port's, on this SDK's device-based input interface).
++ *
++ * Rumble needs the controller's compatible dual-motor mode
++ * (scePadSetVibrationMode 2): without it the PS5 drops it.
++ */
++#include <rex/input/ps5/ps5_input_driver.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cstring>
++
++#include <fmt/format.h>
++
++#include <rex/input/input.h>
++#include <rex/logging.h>
++#include <rex/ui/virtual_key.h>
++
++extern "C" {
++int sceUserServiceInitialize(void* params);
++int sceUserServiceGetForegroundUser(int32_t* user_id);
++struct SceUserServiceLoginUserIdList {
++  int32_t user_id[4];
++};
++int sceUserServiceGetLoginUserIdList(SceUserServiceLoginUserIdList* list);
++int scePadInit(void);
++int scePadOpen(int32_t user_id, int32_t type, int32_t index, const void* param);
++int scePadGetHandle(int32_t user_id, int32_t type, int32_t index);
++int scePadReadState(int32_t handle, void* data);
++int scePadClose(int32_t handle);
++struct ScePadVibrationParam {
++  uint8_t large_motor;
++  uint8_t small_motor;
++};
++int scePadSetVibration(int32_t handle, const ScePadVibrationParam* param);
++int scePadSetVibrationMode(int32_t handle, int32_t mode);
++}
++
++namespace rex::input::ps5 {
++
++namespace {
++
++constexpr int32_t kInvalidUser = -1;
++constexpr int32_t kSystemUser = 0xFF;
++constexpr uint64_t kDeviceIdBase = 0x5053350000000000ull;  // "PS5"
++
++// The head of ScePadData (the rest - touch, motion, ... - is unused).
++struct ScePadDataHead {
++  uint32_t buttons;
++  uint8_t left_stick_x;
++  uint8_t left_stick_y;
++  uint8_t right_stick_x;
++  uint8_t right_stick_y;
++  uint8_t analog_l2;
++  uint8_t analog_r2;
++  uint16_t padding;
++  uint8_t rest[240];  // room for the whole ScePadData
++};
++
++constexpr uint32_t kPadL3 = 0x00000002u;
++constexpr uint32_t kPadR3 = 0x00000004u;
++constexpr uint32_t kPadOptions = 0x00000008u;
++constexpr uint32_t kPadUp = 0x00000010u;
++constexpr uint32_t kPadRight = 0x00000020u;
++constexpr uint32_t kPadDown = 0x00000040u;
++constexpr uint32_t kPadLeft = 0x00000080u;
++constexpr uint32_t kPadL1 = 0x00000400u;
++constexpr uint32_t kPadR1 = 0x00000800u;
++constexpr uint32_t kPadTriangle = 0x00001000u;
++constexpr uint32_t kPadCircle = 0x00002000u;
++constexpr uint32_t kPadCross = 0x00004000u;
++constexpr uint32_t kPadSquare = 0x00008000u;
++constexpr uint32_t kPadTouchpad = 0x00100000u;
++
++// 0..255 (128 centre) to the Xbox's -32768..32767, Y flipped so up is +.
++int16_t AxisToXbox(uint8_t value, bool flip) {
++  int v = (int(value) - 128) * 256;
++  if (flip) v = -v - 1;
++  if (v > 32767) v = 32767;
++  if (v < -32768) v = -32768;
++  return int16_t(v);
++}
++
++uint64_t NowMs() {
++  return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
++                      std::chrono::steady_clock::now().time_since_epoch())
++                      .count());
++}
++
++}  // namespace
++
++Ps5InputDriver::Ps5InputDriver() : InputDriver(nullptr, 0) {}
++
++Ps5InputDriver::~Ps5InputDriver() {
++  std::lock_guard<std::mutex> lock(mutex_);
++  for (Pad& pad : pads_) {
++    if (pad.handle < 0) continue;
++    ScePadVibrationParam still{0, 0};
++    scePadSetVibration(pad.handle, &still);
++    scePadClose(pad.handle);
++    pad.handle = -1;
++  }
++}
++
++X_STATUS Ps5InputDriver::Setup() {
++  sceUserServiceInitialize(nullptr);
++  const int rc = scePadInit();
++  if (rc < 0) {
++    REXLOG_ERROR("PS5 input: scePadInit failed ({:#x})", uint32_t(rc));
++    return X_STATUS_UNSUCCESSFUL;
++  }
++  std::lock_guard<std::mutex> lock(mutex_);
++  RefreshPads();
++  return X_STATUS_SUCCESS;
++}
++
++void Ps5InputDriver::RefreshPads() {
++  SceUserServiceLoginUserIdList users;
++  for (int32_t& u : users.user_id) u = kInvalidUser;
++  if (sceUserServiceGetLoginUserIdList(&users) < 0) {
++    int32_t fg = kInvalidUser;
++    if (sceUserServiceGetForegroundUser(&fg) == 0) users.user_id[0] = fg;
++  }
++  for (int32_t user : users.user_id) {
++    if (user == kInvalidUser || user == kSystemUser) continue;
++    bool known = false;
++    for (const Pad& pad : pads_) known |= pad.user_id == user && pad.handle >= 0;
++    if (known) continue;
++    for (Pad& pad : pads_) {
++      if (pad.handle >= 0) continue;
++      // (already open - 0x80920004 - is answered with the handle it has)
++      int32_t handle = scePadOpen(user, 0, 0, nullptr);
++      if (handle < 0) handle = scePadGetHandle(user, 0, 0);
++      if (handle < 0) break;
++      pad = Pad{};
++      pad.user_id = user;
++      pad.handle = handle;
++      pad.id = static_cast<DeviceId>(kDeviceIdBase | next_id_++);
++      const int mode = scePadSetVibrationMode(handle, 2);  // (rumble: see the top)
++      REXLOG_INFO("PS5 input: DualSense for user {:#x} (handle {}, rumble mode {:#x})", uint32_t(user), handle,
++                  uint32_t(mode));
++      break;
++    }
++  }
++  last_refresh_ms_ = NowMs();
++}
++
++void Ps5InputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
++  std::lock_guard<std::mutex> lock(mutex_);
++  if (NowMs() - last_refresh_ms_ > 500) RefreshPads();
++  for (const Pad& pad : pads_) {
++    if (pad.handle < 0) continue;
++    DeviceInfo info;
++    info.id = pad.id;
++    info.name = "DualSense";
++    info.guid = fmt::format("ps5-pad-user-{:08x}", uint32_t(pad.user_id));
++    info.synthetic = false;
++    out.push_back(info);
++  }
++}
++
++Ps5InputDriver::Pad* Ps5InputDriver::PadFor(DeviceId id) {
++  if (id == DeviceId::kInvalid) return nullptr;
++  for (Pad& pad : pads_) {
++    if (pad.handle >= 0 && pad.id == id) return &pad;
++  }
++  return nullptr;
++}
++
++X_RESULT Ps5InputDriver::ReadState(Pad& pad, bool active, X_INPUT_STATE* out_state) {
++  ScePadDataHead data;
++  std::memset(&data, 0, sizeof(data));
++  if (scePadReadState(pad.handle, &data) != 0) {
++    return X_ERROR_DEVICE_NOT_CONNECTED;
++  }
++  if (!out_state) return X_ERROR_SUCCESS;
++  const uint32_t b = active ? data.buttons : 0;
++  uint16_t buttons = 0;
++  if (b & kPadUp) buttons |= X_INPUT_GAMEPAD_DPAD_UP;
++  if (b & kPadDown) buttons |= X_INPUT_GAMEPAD_DPAD_DOWN;
++  if (b & kPadLeft) buttons |= X_INPUT_GAMEPAD_DPAD_LEFT;
++  if (b & kPadRight) buttons |= X_INPUT_GAMEPAD_DPAD_RIGHT;
++  if (b & kPadOptions) buttons |= X_INPUT_GAMEPAD_START;
++  if (b & kPadTouchpad) buttons |= X_INPUT_GAMEPAD_BACK;
++  if (b & kPadL3) buttons |= X_INPUT_GAMEPAD_LEFT_THUMB;
++  if (b & kPadR3) buttons |= X_INPUT_GAMEPAD_RIGHT_THUMB;
++  if (b & kPadL1) buttons |= X_INPUT_GAMEPAD_LEFT_SHOULDER;
++  if (b & kPadR1) buttons |= X_INPUT_GAMEPAD_RIGHT_SHOULDER;
++  if (b & kPadCross) buttons |= X_INPUT_GAMEPAD_A;
++  if (b & kPadCircle) buttons |= X_INPUT_GAMEPAD_B;
++  if (b & kPadSquare) buttons |= X_INPUT_GAMEPAD_X;
++  if (b & kPadTriangle) buttons |= X_INPUT_GAMEPAD_Y;
++
++  X_INPUT_GAMEPAD gp{};
++  gp.buttons = buttons;
++  gp.left_trigger = active ? data.analog_l2 : 0;
++  gp.right_trigger = active ? data.analog_r2 : 0;
++  gp.thumb_lx = active ? AxisToXbox(data.left_stick_x, false) : 0;
++  gp.thumb_ly = active ? AxisToXbox(data.left_stick_y, true) : 0;
++  gp.thumb_rx = active ? AxisToXbox(data.right_stick_x, false) : 0;
++  gp.thumb_ry = active ? AxisToXbox(data.right_stick_y, true) : 0;
++  // The packet number only moves when the state does, as XInput's does.
++  if (std::memcmp(&gp, &pad.last_gamepad, sizeof(gp)) != 0) {
++    ++pad.packet_number;
++    std::memcpy(&pad.last_gamepad, &gp, sizeof(gp));
++  }
++  std::memset(out_state, 0, sizeof(*out_state));
++  out_state->gamepad = gp;
++  out_state->packet_number = pad.packet_number;
++  return X_ERROR_SUCCESS;
++}
++
++X_RESULT Ps5InputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
++  std::lock_guard<std::mutex> lock(mutex_);
++  Pad* pad = PadFor(id);
++  if (!pad) return X_ERROR_DEVICE_NOT_CONNECTED;
++  return ReadState(*pad, is_active(), out_state);
++}
++
++X_RESULT Ps5InputDriver::GetDeviceCapabilities(DeviceId id, uint32_t flags,
++                                               X_INPUT_CAPABILITIES* out_caps) {
++  (void)flags;
++  std::lock_guard<std::mutex> lock(mutex_);
++  if (!PadFor(id)) return X_ERROR_DEVICE_NOT_CONNECTED;
++  if (out_caps) {
++    std::memset(out_caps, 0, sizeof(*out_caps));
++    out_caps->type = 0x01;      // XINPUT_DEVTYPE_GAMEPAD
++    out_caps->sub_type = 0x01;  // XINPUT_DEVSUBTYPE_GAMEPAD
++    out_caps->gamepad.buttons = 0xF3FF;
++    out_caps->gamepad.left_trigger = 0xFF;
++    out_caps->gamepad.right_trigger = 0xFF;
++    out_caps->gamepad.thumb_lx = int16_t(0x7FFF);
++    out_caps->gamepad.thumb_ly = int16_t(0x7FFF);
++    out_caps->gamepad.thumb_rx = int16_t(0x7FFF);
++    out_caps->gamepad.thumb_ry = int16_t(0x7FFF);
++    out_caps->vibration.left_motor_speed = 0xFFFF;
++    out_caps->vibration.right_motor_speed = 0xFFFF;
++  }
++  return X_ERROR_SUCCESS;
++}
++
++X_RESULT Ps5InputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) {
++  std::lock_guard<std::mutex> lock(mutex_);
++  Pad* pad = PadFor(id);
++  if (!pad) return X_ERROR_DEVICE_NOT_CONNECTED;
++  if (vibration) {
++    ScePadVibrationParam param;
++    param.large_motor = uint8_t(uint16_t(vibration->left_motor_speed) >> 8);
++    param.small_motor = uint8_t(uint16_t(vibration->right_motor_speed) >> 8);
++    scePadSetVibration(pad->handle, &param);
++  }
++  return X_ERROR_SUCCESS;
++}
++
++// Button presses and releases as keystroke events, one per call (the XInput
++// button field, then the triggers as buttons), like the SDL driver's.
++X_RESULT Ps5InputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags,
++                                            X_INPUT_KEYSTROKE* out_keystroke) {
++  (void)flags;
++  if (!out_keystroke) return X_ERROR_BAD_ARGUMENTS;
++  static constexpr rex::ui::VirtualKey kVk[18] = {
++      rex::ui::VirtualKey::kXInputPadDpadUp,      rex::ui::VirtualKey::kXInputPadDpadDown,
++      rex::ui::VirtualKey::kXInputPadDpadLeft,    rex::ui::VirtualKey::kXInputPadDpadRight,
++      rex::ui::VirtualKey::kXInputPadStart,       rex::ui::VirtualKey::kXInputPadBack,
++      rex::ui::VirtualKey::kXInputPadLThumbPress, rex::ui::VirtualKey::kXInputPadRThumbPress,
++      rex::ui::VirtualKey::kXInputPadLShoulder,   rex::ui::VirtualKey::kXInputPadRShoulder,
++      rex::ui::VirtualKey::kNone,                 rex::ui::VirtualKey::kNone,
++      rex::ui::VirtualKey::kXInputPadA,           rex::ui::VirtualKey::kXInputPadB,
++      rex::ui::VirtualKey::kXInputPadX,           rex::ui::VirtualKey::kXInputPadY,
++      rex::ui::VirtualKey::kXInputPadLTrigger,    rex::ui::VirtualKey::kXInputPadRTrigger,
++  };
++  std::lock_guard<std::mutex> lock(mutex_);
++  Pad* pad = PadFor(id);
++  if (!pad) return X_ERROR_DEVICE_NOT_CONNECTED;
++  X_INPUT_STATE state{};
++  if (ReadState(*pad, is_active(), &state) != X_ERROR_SUCCESS) return X_ERROR_DEVICE_NOT_CONNECTED;
++  uint32_t now = uint16_t(state.gamepad.buttons);
++  if (state.gamepad.left_trigger > 30) now |= 1u << 16;
++  if (state.gamepad.right_trigger > 30) now |= 1u << 17;
++  const uint32_t changed = now ^ pad->keystroke_buttons;
++  for (uint32_t bit = 0; bit < 18; ++bit) {
++    if (!(changed & (1u << bit)) || kVk[bit] == rex::ui::VirtualKey::kNone) continue;
++    const bool down = (now >> bit) & 1;
++    pad->keystroke_buttons ^= 1u << bit;
++    out_keystroke->virtual_key = uint16_t(kVk[bit]);
++    out_keystroke->unicode = 0;
++    out_keystroke->user_index = 0;  // (InputSystem fills in the guest user)
++    out_keystroke->hid_code = 0;
++    out_keystroke->flags = down ? X_INPUT_KEYSTROKE_KEYDOWN : X_INPUT_KEYSTROKE_KEYUP;
++    return X_ERROR_SUCCESS;
++  }
++  pad->keystroke_buttons = now;
++  return X_ERROR_EMPTY;
++}
++
++std::unique_ptr<InputDriver> CreatePs5InputDriver() { return std::make_unique<Ps5InputDriver>(); }
++
++}  // namespace rex::input::ps5
+diff --git a/src/kernel/xam/xam_info.cpp b/src/kernel/xam/xam_info.cpp
+index 1fda0536..958dd7c3 100644
+--- a/src/kernel/xam/xam_info.cpp
++++ b/src/kernel/xam/xam_info.cpp
+@@ -12,6 +12,10 @@
+ #include <rex/kernel/xam/module.h>
+ #include <rex/kernel/xam/private.h>
+ #include <rex/logging.h>
++#include <rex/platform.h>
++#if REX_PLATFORM_PS5
++#include <rex/ps5_diag.h>
++#endif
+ #include <rex/hook.h>
+ #include <rex/types.h>
+ #include <rex/string.h>
+@@ -281,6 +285,10 @@ void XamLoaderLaunchTitle_entry(mapped_string raw_name_ptr, u32 flags) {
+       loader_data.launch_path = path;
+     }
+   } else {
++#if REX_PLATFORM_PS5
++    REXLOG_INFO("The game asked to quit (XamLoaderLaunchTitle, no title)");
++    if (rex::ps5diag::title_exit_hook) rex::ps5diag::title_exit_hook();
++#endif
+     assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");
+   }
+ 
+@@ -289,6 +297,10 @@ void XamLoaderLaunchTitle_entry(mapped_string raw_name_ptr, u32 flags) {
+ }
+ 
+ void XamLoaderTerminateTitle_entry() {
++#if REX_PLATFORM_PS5
++  REXLOG_INFO("The game asked to quit (XamLoaderTerminateTitle)");
++  if (rex::ps5diag::title_exit_hook) rex::ps5diag::title_exit_hook();
++#endif
+   // This function does not return.
+   REX_KERNEL_STATE()->TerminateTitle();
+ }
+@@ -362,4 +374,11 @@ REX_EXPORT(__imp__XamAlloc, rex::kernel::xam::XamAlloc_entry)
+ REX_EXPORT(__imp__XamFree, rex::kernel::xam::XamFree_entry)
+ REX_EXPORT(__imp__XamQueryLiveHiveW, rex::kernel::xam::XamQueryLiveHiveW_entry)
+ REX_EXPORT(__imp__XamLoaderGetDvdTrayState, rex::kernel::xam::XamLoaderGetDvdTrayState_entry)
++#if REX_PLATFORM_PS5
++// [ps5 port] One static program on the PS5: a title that brings its own
++// XamSwapDisc (Dead Space 2's automatic disc swap, a strong symbol in the app)
++// replaces this stub instead of colliding with it at link time. On the PC the
++// runtime is a DLL and the two never meet.
++extern "C" __attribute__((weak)) REX_FUNC(__imp__XamSwapDisc);
++#endif
+ REX_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)
+diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
+index fc46d869..1251c2e3 100644
+--- a/src/system/CMakeLists.txt
++++ b/src/system/CMakeLists.txt
+@@ -48,7 +48,12 @@ set(REXSYSTEM_SOURCES
+     xex_module.cpp
+ )
+ 
+-add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
++# [ps5 port] one static app on the PS5 (no shared libraries of our own).
++if(PS5)
++    add_library(rexruntime STATIC ${REXSYSTEM_SOURCES})
++else()
++    add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
++endif()
+ add_library(rex::runtime ALIAS rexruntime)
+ add_library(rex::system ALIAS rexruntime)
+ add_library(rex::kernel ALIAS rexruntime)
+diff --git a/src/system/gpu_plugin_loader.cpp b/src/system/gpu_plugin_loader.cpp
+index 754fa138..b84962eb 100644
+--- a/src/system/gpu_plugin_loader.cpp
++++ b/src/system/gpu_plugin_loader.cpp
+@@ -54,7 +54,31 @@ std::vector<platform::DynamicLibrary>& LoadedPlugins() {
+ 
+ }  // namespace
+ 
++#if REX_PLATFORM_PS5
++}  // namespace rex::system
++// [ps5 port] No shared libraries of our own on the PS5: the Xenos backend is
++// linked into the program (graphics/plugin_main.cpp) and created directly.
++extern "C" rex::system::IGraphicsSystem* rex_gpu_create(uint32_t abi_version,
++                                                         const rex::system::GpuCreateInfo* info);
++namespace rex::system {
++#endif
++
+ std::unique_ptr<IGraphicsSystem> LoadGpuPlugin(std::string_view name, std::string_view backend) {
++#if REX_PLATFORM_PS5
++  {
++    std::string backend_str(backend);
++    GpuCreateInfo info{};
++    info.struct_size = sizeof(GpuCreateInfo);
++    info.backend = backend_str.c_str();
++    IGraphicsSystem* graphics_system = rex_gpu_create(kGpuPluginAbiVersion, &info);
++    if (!graphics_system) {
++      REXSYS_ERROR("GPU backend '{}' (built in) returned no graphics system", name);
++      return nullptr;
++    }
++    REXSYS_INFO("GPU backend '{}' (built in, {})", name, backend_str);
++    return std::unique_ptr<IGraphicsSystem>(graphics_system);
++  }
++#endif
+   auto path = rex::filesystem::GetExecutableFolder() / PluginFileName(name);
+   if (!std::filesystem::exists(path)) {
+     REXSYS_ERROR(
+diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
+index 2b930058..16f52c56 100644
+--- a/src/system/mmio_handler.cpp
++++ b/src/system/mmio_handler.cpp
+@@ -13,6 +13,7 @@
+ #include <cstring>
+ #include <utility>
+ 
++#include <rex/ps5_diag.h>
+ #include <rex/assert.h>
+ #include <rex/exception_handler.h>
+ #include <rex/logging.h>
+@@ -372,6 +373,7 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+   if (ex->code() != arch::Exception::Code::kAccessViolation) {
+     return false;
+   }
++  rex::ps5diag::Add(rex::ps5diag::kAccessViolations);
+   arch::Exception::AccessViolationOperation operation = ex->access_violation_operation();
+   if (operation != arch::Exception::AccessViolationOperation::kRead &&
+       operation != arch::Exception::AccessViolationOperation::kWrite) {
+@@ -417,12 +419,16 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+     // The address is not found within any range, so either a write watch or an
+     // actual access violation.
+     if (access_violation_callback_) {
+-      return access_violation_callback_(std::move(lock), access_violation_callback_context_,
+-                                        fault_host_address, is_write);
++      const bool handled = access_violation_callback_(
++          std::move(lock), access_violation_callback_context_, fault_host_address, is_write);
++      if (handled) rex::ps5diag::Add(rex::ps5diag::kWatchFaults);
++      return handled;
+     }
+     return false;
+   }
+ 
++  rex::ps5diag::Add(rex::ps5diag::kMmioAccesses);
++
+   auto rip = ex->pc();
+   auto p = reinterpret_cast<const uint8_t*>(rip);
+   DecodedLoadStore decoded_load_store;
+diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
+index ef0c6e67..04069da7 100644
+--- a/src/system/xmemory.cpp
++++ b/src/system/xmemory.cpp
+@@ -9,13 +9,22 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <rex/platform.h>
+ #include <algorithm>
++#include <cerrno>
+ #include <cstring>
+ #include <utility>
+ 
+-#if REX_PLATFORM_MAC
++#if REX_PLATFORM_MAC || REX_PLATFORM_PS5  // [ps5 port]
+ #include <sys/mman.h>
+ #endif
++#if REX_PLATFORM_PS5
++// [ps5 port] Guest memory in PS5 direct memory through libps5platform's
++// shared memory objects: an app's ordinary shared/anonymous memory comes from
++// a small flexible pool, too little for the Xbox 360's RAM.
++#include <ps5platform/shm.h>
++#include <rex/ps5_diag.h>
++#endif
+ 
+ #include <fmt/format.h>
+ 
+@@ -151,12 +160,26 @@ bool Memory::Initialize() {
+   mapping_ = rex::memory::CreateFileMappingHandle(file_name_, mapping_size,
+                                                   rex::memory::PageAccess::kReadWrite, false);
+   if (mapping_ == rex::memory::kFileMappingHandleInvalid) {
++#if REX_PLATFORM_PS5
++    // [ps5 port] Expected in a PS5 app: shared memory comes from the small
++    // flexible pool. MapViewsPs5 maps the guest in direct memory instead.
++    REXSYS_INFO("PS5: no shared memory object for the guest; using direct memory");
++#else
+     REXSYS_ERROR("Unable to reserve the 4gb guest address space.");
+     assert_always();
+     return false;
++#endif
+   }
+ 
+-#if REX_PLATFORM_MAC
++#if REX_PLATFORM_PS5
++  // [ps5 port] Reserve the whole range, then fixed views into it (the layout
++  // the GTA IV port tested on a console).
++  if (MapViewsPs5()) {
++    REXSYS_ERROR("PS5: unable to map the guest address space.");
++    return false;
++  }
++  mapping_base_ = views_.all_views[0];
++#elif REX_PLATFORM_MAC
+   // On macOS, reserve a contiguous host range first, then carve guest views
+   // into it with MAP_SHARED|MAP_FIXED so all views share the same backing fd.
+   if (MapViewsMac()) {
+@@ -375,6 +398,148 @@ static const struct {
+         0x0000000100000000ull,
+     },
+ };
++#if REX_PLATFORM_PS5
++// [ps5 port] Reserve the guest range, then map each view into it with a fixed
++// address, in direct memory (after the GTA IV PS5 port's MapViewsPs5, which
++// follows UnleashedRecomp-Prospero's guest mapping).
++int Memory::MapViewsPs5() {
++  assert_true(rex::countof(map_info) == rex::countof(views_.all_views));
++
++  const size_t total_size =
++      static_cast<size_t>(map_info[rex::countof(map_info) - 1].virtual_address_end -
++                          map_info[0].virtual_address_start + 1);
++
++  // Address space only (near 64 GiB).
++  void* reserved_base = nullptr;
++  if (ps5_vrange_reserve(total_size, reinterpret_cast<void*>(0x1000000000ull), 0x10000,
++                         &reserved_base) != 0 ||
++      !reserved_base) {
++    reserved_base = mmap(nullptr, total_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++  }
++  if (reserved_base == MAP_FAILED || !reserved_base) {
++    REXSYS_ERROR("MapViewsPs5: reserve failed: {}", std::strerror(errno));
++    return 1;
++  }
++  rex::ps5diag::guest_arena_lo = reinterpret_cast<uintptr_t>(reserved_base);
++  rex::ps5diag::guest_arena_hi = reinterpret_cast<uintptr_t>(reserved_base) + total_size;
++
++  uint8_t* mapping_base = reinterpret_cast<uint8_t*>(reserved_base);
++  uint64_t granularity_mask = ~uint64_t(system_allocation_granularity_ - 1);
++
++  {
++    // One object for the whole 4.5 GB backing (offsets as map_info's) if
++    // direct memory has room for it, else one object per mirrored region:
++    // guest virtual (views 0-1), the XEX (3-4) and physical memory (2, 5-8).
++    struct Region {
++      uint64_t start, size;
++      ps5_shm shm;
++      bool ok;
++    };
++    Region regions[3] = {{0x000000000ull, 0x07F000000ull, {}, false},
++                         {0x080000000ull, 0x010000000ull, {}, false},
++                         {0x100000000ull, 0x020000000ull + 0x10000, {}, false}};
++    ps5_shm whole{};
++    bool use_whole = ps5_shm_create(0x120000000ull + 0x10000, &whole) == 0;
++    bool regions_ok = use_whole;
++    if (!use_whole) {
++      regions_ok = true;
++      for (Region& r : regions) {
++        r.ok = ps5_shm_create(r.size, &r.shm) == 0;
++        regions_ok &= r.ok;
++      }
++    }
++    bool mapped = regions_ok;
++    for (size_t n = 0; mapped && n < rex::countof(map_info); n++) {
++      size_t view_size = static_cast<size_t>(map_info[n].virtual_address_end -
++                                             map_info[n].virtual_address_start + 1);
++      uint64_t target = map_info[n].target_address & granularity_mask;
++      const ps5_shm* shm = &whole;
++      uint64_t offset = target;
++      if (!use_whole) {
++        shm = nullptr;
++        for (Region& r : regions) {
++          if (target >= r.start && target + view_size <= r.start + r.size) {
++            shm = &r.shm;
++            offset = target - r.start;
++          }
++        }
++      }
++      void* view = nullptr;
++      void* wanted = mapping_base + map_info[n].virtual_address_start;
++      int rc = shm ? ps5_shm_map(shm, offset, view_size, wanted, PS5_SHM_READ | PS5_SHM_WRITE,
++                                 PS5_SHM_FIXED, &view)
++                   : -1;
++      if (rc != 0 || view != wanted) {
++        REXSYS_ERROR("PS5: guest view {} (guest {:#x}) failed ({:#x})", n,
++                     map_info[n].virtual_address_start, uint32_t(rc));
++        mapped = false;
++        break;
++      }
++      views_.all_views[n] = reinterpret_cast<uint8_t*>(view);
++    }
++    if (mapped) {
++      REXSYS_INFO("PS5: guest memory in direct memory ({}), host page {} KB, base {:#x}",
++                  use_whole ? "one object" : "three objects", system_page_size_ >> 10,
++                  reinterpret_cast<uintptr_t>(mapping_base));
++      // Self-test: the mirrors must show one memory. Write through one view,
++      // read through its mirror (GPU write-backs go through the raw physical
++      // view, the game reads them through 0xA0000000 / 0xC0000000 / 0xE0000000).
++      struct Pair {
++        int a, b;
++        const char* name;
++      } pairs[] = {{8, 5, "phys raw->A0"}, {8, 6, "phys raw->C0"}, {5, 6, "A0->C0"},
++                   {3, 4, "xex 80->90"},   {2, 8, "7F->phys raw"},
++                   {8, 7, "phys raw->E0"}};
++      bool mirrors_ok = true;
++      for (const Pair& p : pairs) {
++        volatile uint32_t* wa = reinterpret_cast<volatile uint32_t*>(views_.all_views[p.a] + 0x40);
++        volatile uint32_t* rb = reinterpret_cast<volatile uint32_t*>(views_.all_views[p.b] + 0x40);
++        uint32_t saved = *wa;
++        *wa = 0x5A17C0DE;
++        uint32_t seen = *rb;
++        *wa = saved;
++        if (seen != 0x5A17C0DE) {
++          mirrors_ok = false;
++          REXSYS_ERROR("PS5: mirror {}: BROKEN", p.name);
++        }
++      }
++      REXSYS_INFO("PS5: guest memory mirrors {}", mirrors_ok ? "ok" : "BROKEN");
++      return mirrors_ok ? 0 : 1;
++    }
++    REXSYS_ERROR("PS5: no direct memory for the guest ({})",
++                 regions_ok ? "mapping failed" : "allocation failed");
++    if (mapping_ == rex::memory::kFileMappingHandleInvalid) {
++      return 1;
++    }
++  }
++
++  // Last resort: the shared memory object, when the console gave us one.
++  for (size_t n = 0; n < rex::countof(map_info); n++) {
++    size_t view_size = static_cast<size_t>(map_info[n].virtual_address_end -
++                                           map_info[n].virtual_address_start + 1);
++    size_t file_offset = static_cast<size_t>(map_info[n].target_address & granularity_mask);
++    void* target_address = mapping_base + map_info[n].virtual_address_start;
++    void* result = mmap(target_address, view_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED,
++                        mapping_, file_offset);
++    if (result == MAP_FAILED || result != target_address) {
++      int err = errno;
++      REXSYS_ERROR(
++          "MapViewsPs5: map failed view {} addr 0x{:016X} size 0x{:X} offset 0x{:X} err {} ({})", n,
++          reinterpret_cast<uintptr_t>(target_address), view_size, file_offset, err,
++          std::strerror(err));
++      munmap(reserved_base, total_size);
++      for (auto& view : views_.all_views) {
++        view = nullptr;
++      }
++      return 1;
++    }
++    views_.all_views[n] = reinterpret_cast<uint8_t*>(result);
++  }
++
++  return 0;
++}
++#endif  // REX_PLATFORM_PS5
++
+ #if REX_PLATFORM_MAC
+ int Memory::MapViewsMac() {
+   assert_true(rex::countof(map_info) == rex::countof(views_.all_views));
+@@ -606,7 +771,7 @@ runtime::MMIORange* Memory::LookupVirtualMappedRange(uint32_t virtual_address) {
+   return mmio_handler_->LookupRange(virtual_address);
+ }
+ 
+-bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> global_lock_locked_once,
++bool Memory::AccessViolationCallback(rex::thread::global_lock_t global_lock_locked_once,
+                                      void* host_address, bool is_write) {
+   // Access via physical_membase_ is special, when need to bypass everything
+   // (for instance, for a data provider to actually write the data) so only
+@@ -710,14 +875,14 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
+ }
+ 
+ bool Memory::AccessViolationCallbackThunk(
+-    std::unique_lock<std::recursive_mutex> global_lock_locked_once, void* context,
++    rex::thread::global_lock_t global_lock_locked_once, void* context,
+     void* host_address, bool is_write) {
+   return reinterpret_cast<memory::Memory*>(context)->AccessViolationCallback(
+       std::move(global_lock_locked_once), host_address, is_write);
+ }
+ 
+ bool Memory::TriggerPhysicalMemoryCallbacks(
+-    std::unique_lock<std::recursive_mutex> global_lock_locked_once, uint32_t virtual_address,
++    rex::thread::global_lock_t global_lock_locked_once, uint32_t virtual_address,
+     uint32_t length, bool is_write, bool unwatch_exact_range, bool unprotect) {
+   BaseHeap* heap = LookupHeap(virtual_address);
+   if (!heap) {
+@@ -982,7 +1147,7 @@ BaseHeap::BaseHeap() : membase_(nullptr), heap_base_(0), heap_size_(0), page_siz
+ 
+ BaseHeap::~BaseHeap() = default;
+ 
+-std::unique_lock<std::recursive_mutex> BaseHeap::AcquireHostPageReconcileLock() const {
++rex::thread::global_lock_t BaseHeap::AcquireHostPageReconcileLock() const {
+   if (page_size_ >= memory_->system_page_size_) {
+     return {};
+   }
+@@ -1791,7 +1956,14 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect, uint32
+     }
+ 
+     if (old_protect) {
++#if REX_PLATFORM_PS5
++      // [ps5 port] The host can't be asked what a range's protection was
++      // (memory_posix.cpp): the guest page table is the truth.
++      (void)old_protect_access;
++      *old_protect = page_table_[start_page_number].current_protect;
++#else
+       *old_protect = FromPageAccess(old_protect_access);
++#endif
+     }
+   } else {
+     if (old_protect) {
+@@ -2259,7 +2431,7 @@ void PhysicalHeap::EnableAccessCallbacks(uint32_t physical_address, uint32_t len
+ #endif
+ }
+ 
+-bool PhysicalHeap::TriggerCallbacks(std::unique_lock<std::recursive_mutex> global_lock_locked_once,
++bool PhysicalHeap::TriggerCallbacks(rex::thread::global_lock_t global_lock_locked_once,
+                                     uint32_t virtual_address, uint32_t length, bool is_write,
+                                     bool unwatch_exact_range, bool unprotect) {
+   // TODO(Triang3l): Support read watches.
+@@ -2423,7 +2595,7 @@ bool PhysicalHeap::TriggerCallbacks(std::unique_lock<std::recursive_mutex> globa
+   return true;
+ }
+ 
+-std::unique_lock<std::recursive_mutex> PhysicalHeap::AcquireHostPageReconcileLock() const {
++rex::thread::global_lock_t PhysicalHeap::AcquireHostPageReconcileLock() const {
+   auto lock = BaseHeap::AcquireHostPageReconcileLock();
+   if (!lock.owns_lock() && parent_heap_ && parent_heap_->page_size() < memory_->system_page_size_) {
+     lock = rex::thread::global_critical_region::AcquireDirect();
+diff --git a/src/ui/CMakeLists.txt b/src/ui/CMakeLists.txt
+index 5bd3dc55..2d317621 100644
+--- a/src/ui/CMakeLists.txt
++++ b/src/ui/CMakeLists.txt
+@@ -72,6 +72,10 @@ elseif(APPLE)
+     set(REXUI_PLATFORM_SOURCES
+         surface_mac.cpp
+     )
++elseif(PS5)  # [ps5 port] the TV through VK_KHR_display; SDL (dummy video) runs the app loop
++    set(REXUI_PLATFORM_SOURCES
++        surface_ps5.cpp
++    )
+ else()
+     set(REXUI_PLATFORM_SOURCES
+         surface_gnulinux.cpp
+@@ -146,7 +150,9 @@ if(REXGLUE_USE_VULKAN)
+ endif()
+ 
+ # Platform-specific dependencies
+-if(UNIX AND NOT APPLE)
++if(PS5)
++    # [ps5 port] no X11 / Wayland; RADV is linked statically into the app.
++elseif(UNIX AND NOT APPLE)
+     find_package(PkgConfig REQUIRED)
+     pkg_check_modules(X11_XCB REQUIRED x11-xcb)
+     # Required, not optional: vulkan/api.h pulls in <wayland-client.h> on every
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e4..1a5709ae 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -43,9 +43,14 @@
+ #include <imgui.h>
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <filesystem>
+ #include <string_view>
+ 
++#if REX_PLATFORM_PS5
++#include <spdlog/spdlog.h>
++#endif
++
+ REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
+                       "GPU emulation plugin to load at startup (e.g. 'xenos'); empty disables "
+                       "GPU emulation")
+@@ -171,7 +176,18 @@ bool ReXApp::SetupEnvironment() {
+     log_config.log_dir = (exe_dir / "logs").string();
+   }
+ 
++#if REX_PLATFORM_PS5
++  // [ps5 port] The log file is written every 2 s, not after every line: each
++  // line was a write to the drive by whichever thread logged it, sometimes one
++  // holding a lock the game's render thread then waited on (the GTA IV port
++  // saw 0.8-0.9 s stalls). A crash writes its own line and flushes the rest
++  // (ps5_diag.cpp, the crash hook).
++  log_config.flush_level = spdlog::level::critical;
++#endif
+   rex::InitLogging(log_config);
++#if REX_PLATFORM_PS5
++  if (REXCVAR_GET(log_flush_interval) <= 0) spdlog::flush_every(std::chrono::seconds(2));
++#endif
+   rex::RegisterLogLevelCallback();
+ 
+   log_sink_ = std::make_shared<rex::LogCaptureSink>();
+diff --git a/src/ui/surface_ps5.cpp b/src/ui/surface_ps5.cpp
+new file mode 100644
+index 00000000..939a240d
+--- /dev/null
++++ b/src/ui/surface_ps5.cpp
+@@ -0,0 +1,5 @@
++/**
++ * [ps5 port] PS5 display surface: all state lives in the header (the display
++ * has no window to query); this file keeps the per-platform source layout.
++ */
++#include <rex/ui/surface_ps5.h>
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index bff53a11..07f471d4 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -33,12 +33,38 @@ extern "C" VKAPI_ATTR void VKAPI_CALL vkDestroyInstance(VkInstance instance,
+                                                      const VkAllocationCallbacks* pAllocator);
+ #endif
+ 
++#if REX_PLATFORM_PS5
++#include <cstring>
++#include <string>
++// [ps5 port] No loader library on the PS5: PS5_Mesa's RADV is linked into the
++// program and its ICD entry point stands in for vkGetInstanceProcAddr (as in
++// plume-ps5 and the GTA IV port).
++extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(
++    VkInstance instance, const char* name) __attribute__((weak));
++#endif
++
+ REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, true, "UI/Vulkan", "Log Vulkan debug messages");
+ 
+ namespace rex {
+ namespace ui {
+ namespace vulkan {
+ 
++#if REX_PLATFORM_PS5
++// RADV exports some core 1.1 names only under their KHR aliases: a name it
++// doesn't know is asked for again with KHR on the end.
++static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL Ps5GetInstanceProcAddr(VkInstance instance,
++                                                                       const char* name) {
++  if (!vk_icdGetInstanceProcAddr || !name) return nullptr;
++  if (PFN_vkVoidFunction fn = vk_icdGetInstanceProcAddr(instance, name)) return fn;
++  const size_t length = std::strlen(name);
++  if (length > 3 && std::strcmp(name + length - 3, "KHR") != 0) {
++    const std::string alias = std::string(name) + "KHR";
++    return vk_icdGetInstanceProcAddr(instance, alias.c_str());
++  }
++  return nullptr;
++}
++#endif
++
+ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+                                                        const bool try_enable_validation) {
+   std::unique_ptr<VulkanInstance> vulkan_instance(new VulkanInstance());
+@@ -86,6 +112,11 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+   loader_loaded = true;
+   ifn.vkGetInstanceProcAddr = &::vkGetInstanceProcAddr;
+   ifn.vkDestroyInstance = &::vkDestroyInstance;
++#elif REX_PLATFORM_PS5
++  // (vkDestroyInstance comes from the instance, once there is one)
++  loader_loaded = true;
++  ifn.vkGetInstanceProcAddr = Ps5GetInstanceProcAddr;
++  functions_loaded &= vk_icdGetInstanceProcAddr != nullptr;
+ #else
+   loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
+   if (!loader_loaded) {
+@@ -94,7 +125,7 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+   }
+ #endif
+ 
+-#if !REX_PLATFORM_NX
++#if !REX_PLATFORM_NX && !REX_PLATFORM_PS5
+ #define XE_VULKAN_LOAD_LOADER_FUNCTION(name) \
+   functions_loaded &= (ifn.name = vulkan_instance->loader_.GetSymbol<PFN_##name>(#name)) != nullptr;
+   XE_VULKAN_LOAD_LOADER_FUNCTION(vkGetInstanceProcAddr);
+@@ -183,6 +214,10 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+     // #63 (N2).
+     requested_extensions.emplace("VK_NN_vi_surface",
+                                  &vulkan_instance->extensions_.ext_NN_vi_surface);
++#endif
++#if REX_PLATFORM_PS5
++    // #3. [ps5 port] the TV is a display plane
++    requested_extensions.emplace("VK_KHR_display", &vulkan_instance->extensions_.ext_KHR_display);
+ #endif
+   }
+ 
+@@ -405,6 +440,12 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+ 
+   // Load instance functions.
+ 
++#if REX_PLATFORM_PS5
++  ifn.vkDestroyInstance = PFN_vkDestroyInstance(
++      ifn.vkGetInstanceProcAddr(vulkan_instance->instance_, "vkDestroyInstance"));
++  functions_loaded &= ifn.vkDestroyInstance != nullptr;
++#endif
++
+ #define XE_UI_VULKAN_FUNCTION(name)                                                            \
+   functions_loaded &=                                                                          \
+       (ifn.name = PFN_##name(ifn.vkGetInstanceProcAddr(vulkan_instance->instance_, #name))) != \
+@@ -456,6 +497,11 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+   if (vulkan_instance->extensions_.ext_EXT_metal_surface) {
+ #include <rex/ui/vulkan/functions/instance_ext_metal_surface.inc>
+   }
++#endif
++#if REX_PLATFORM_PS5
++  if (vulkan_instance->extensions_.ext_KHR_display) {
++#include <rex/ui/vulkan/functions/instance_khr_display.inc>
++  }
+ #endif
+   if (vulkan_instance->extensions_.ext_KHR_surface) {
+ #include <rex/ui/vulkan/functions/instance_khr_surface.inc>
+diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
+index 0c5dc1ef..61aca6ca 100644
+--- a/src/ui/vulkan/vulkan_presenter.cpp
++++ b/src/ui/vulkan/vulkan_presenter.cpp
+@@ -48,6 +48,111 @@
+ #if REX_PLATFORM_NX
+ #include <rex/ui/surface_nx.h>
+ #endif
++#if REX_PLATFORM_PS5
++#include <rex/ui/surface_ps5.h>
++extern "C" int sceSystemServiceHideSplashScreen();
++#endif
++
++#if REX_PLATFORM_PS5
++REXCVAR_DEFINE_INT32(ps5_display_height, 2160, "PS5",
++                     "Preferred TV mode height: 2160 (4K) or 1080; the TV's first mode when it has neither");
++
++namespace {
++// [ps5 port] A VkSurfaceKHR on the TV: the first display that reports modes,
++// its mode of the preferred height if any (else its first), and a plane that
++// can show that display. Updates the surface's size to the mode's visible
++// region. After plume-ps5's createPs5DisplaySurface (Nazky, MIT), as the GTA
++// IV port uses it.
++VkResult CreatePs5DisplaySurface(const rex::ui::vulkan::VulkanInstance::Functions& ifn,
++                                 VkInstance instance, VkPhysicalDevice physical_device,
++                                 rex::ui::Ps5DisplaySurface& surface, VkSurfaceKHR& surface_out) {
++  sceSystemServiceHideSplashScreen();
++  if (!ifn.vkGetPhysicalDeviceDisplayPropertiesKHR || !ifn.vkCreateDisplayPlaneSurfaceKHR) {
++    return VK_ERROR_EXTENSION_NOT_PRESENT;
++  }
++  uint32_t display_count = 0;
++  VkResult res = ifn.vkGetPhysicalDeviceDisplayPropertiesKHR(physical_device, &display_count, nullptr);
++  if (res != VK_SUCCESS || !display_count) {
++    REXLOG_ERROR("PS5 display: no displays ({})", int(res));
++    return VK_ERROR_INITIALIZATION_FAILED;
++  }
++  std::vector<VkDisplayPropertiesKHR> displays(display_count);
++  res = ifn.vkGetPhysicalDeviceDisplayPropertiesKHR(physical_device, &display_count, displays.data());
++  if (res != VK_SUCCESS) return res;
++  uint32_t plane_count = 0;
++  res = ifn.vkGetPhysicalDeviceDisplayPlanePropertiesKHR(physical_device, &plane_count, nullptr);
++  if (res != VK_SUCCESS || !plane_count) {
++    REXLOG_ERROR("PS5 display: no display planes ({})", int(res));
++    return VK_ERROR_INITIALIZATION_FAILED;
++  }
++  std::vector<VkDisplayPlanePropertiesKHR> planes(plane_count);
++  res = ifn.vkGetPhysicalDeviceDisplayPlanePropertiesKHR(physical_device, &plane_count, planes.data());
++  if (res != VK_SUCCESS) return res;
++
++  const uint32_t wanted_height = uint32_t(std::max(REXCVAR_GET(ps5_display_height), 1));
++  VkDisplayKHR display = VK_NULL_HANDLE;
++  VkDisplayModeKHR mode = VK_NULL_HANDLE;
++  VkExtent2D extent = {3840, 2160};
++  uint32_t refresh_millihertz = 0;
++  for (uint32_t i = 0; i < display_count && mode == VK_NULL_HANDLE; ++i) {
++    uint32_t mode_count = 0;
++    if (ifn.vkGetDisplayModePropertiesKHR(physical_device, displays[i].display, &mode_count,
++                                          nullptr) != VK_SUCCESS ||
++        !mode_count) {
++      continue;
++    }
++    std::vector<VkDisplayModePropertiesKHR> modes(mode_count);
++    if (ifn.vkGetDisplayModePropertiesKHR(physical_device, displays[i].display, &mode_count,
++                                          modes.data()) != VK_SUCCESS) {
++      continue;
++    }
++    for (const VkDisplayModePropertiesKHR& m : modes) {
++      REXLOG_INFO("PS5 display: mode {}x{} at {:.2f} Hz", m.parameters.visibleRegion.width,
++                  m.parameters.visibleRegion.height, m.parameters.refreshRate / 1000.0);
++    }
++    display = displays[i].display;
++    mode = modes[0].displayMode;
++    extent = modes[0].parameters.visibleRegion;
++    refresh_millihertz = modes[0].parameters.refreshRate;
++    for (const VkDisplayModePropertiesKHR& m : modes) {
++      if (m.parameters.visibleRegion.height == wanted_height) {
++        mode = m.displayMode;
++        extent = m.parameters.visibleRegion;
++        refresh_millihertz = m.parameters.refreshRate;
++        break;
++      }
++    }
++  }
++  if (mode == VK_NULL_HANDLE) {
++    REXLOG_ERROR("PS5 display: no usable display mode");
++    return VK_ERROR_INITIALIZATION_FAILED;
++  }
++  uint32_t plane = 0;
++  for (uint32_t i = 0; i < plane_count; ++i) {
++    if (planes[i].currentDisplay == VK_NULL_HANDLE || planes[i].currentDisplay == display) {
++      plane = i;
++      break;
++    }
++  }
++  VkDisplaySurfaceCreateInfoKHR info = {};
++  info.sType = VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR;
++  info.displayMode = mode;
++  info.planeIndex = plane;
++  info.planeStackIndex = planes[plane].currentStackIndex;
++  info.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++  info.globalAlpha = 1.0f;
++  info.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
++  info.imageExtent = extent;
++  res = ifn.vkCreateDisplayPlaneSurfaceKHR(instance, &info, nullptr, &surface_out);
++  if (res == VK_SUCCESS) {
++    surface.SetSize(extent.width, extent.height);
++    REXLOG_INFO("PS5 display: {}x{} at {:.2f} Hz on plane {}", extent.width, extent.height,
++                refresh_millihertz / 1000.0, plane);
++  }
++  return res;
++}
++}  // namespace
++#endif
+ 
+ REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
+                     "Clear render pass during presentation");
+@@ -453,6 +558,11 @@ Surface::TypeFlags VulkanPresenter::GetSurfaceTypesSupportedByInstance(
+   if (instance_extensions.ext_NN_vi_surface) {
+     type_flags |= Surface::kTypeFlag_ViNN;
+   }
++#endif
++#if REX_PLATFORM_PS5
++  if (instance_extensions.ext_KHR_display) {
++    type_flags |= Surface::kTypeFlag_Ps5Display;
++  }
+ #endif
+   return type_flags;
+ }
+@@ -881,6 +991,20 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
+                                                   &paint_context_.vulkan_surface)
+                               : VK_ERROR_EXTENSION_NOT_PRESENT;
+       } break;
++#endif
++#if REX_PLATFORM_PS5
++      case Surface::kTypeIndex_Ps5Display: {
++        // [ps5 port] The TV: a display plane surface on the mode picked above;
++        // the surface learns the mode's size here.
++        auto& ps5_surface = const_cast<Ps5DisplaySurface&>(
++            static_cast<const Ps5DisplaySurface&>(new_surface));
++        vulkan_surface_create_result =
++            CreatePs5DisplaySurface(ifn, instance, vulkan_device_->physical_device(), ps5_surface,
++                                    paint_context_.vulkan_surface);
++        if (vulkan_surface_create_result == VK_SUCCESS) {
++          ps5_surface.GetSize(new_surface_width, new_surface_height);
++        }
++      } break;
+ #endif
+       default:
+         assert_unhandled_case(surface_type);
+diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
+index 2251429b..7db25382 100644
+--- a/src/ui/window_sdl.cpp
++++ b/src/ui/window_sdl.cpp
+@@ -35,6 +35,8 @@
+ #include <SDL3/SDL_metal.h>
+ 
+ #include <rex/ui/surface_mac.h>
++#elif REX_PLATFORM_PS5
++#include <rex/ui/surface_ps5.h>  // [ps5 port]
+ #else
+ #include <X11/Xlib-xcb.h>
+ #include <rex/ui/surface_gnulinux.h>
+@@ -144,7 +146,16 @@ bool WindowSDL::OpenImpl() {
+   int initial_width = int(SizeToPhysical(GetDesiredLogicalWidth()));
+   int initial_height = int(SizeToPhysical(GetDesiredLogicalHeight()));
+ #endif
++#if REX_PLATFORM_PS5
++  // [ps5 port] The window is the dummy driver's and only carries events: as
++  // big as the TV picture, never "fullscreen" (that would take the dummy
++  // display's 1024x768 mode and lay ImGui screens out 4:3).
++  (void)initial_width;
++  (void)initial_height;
++  sdl_window_ = SDL_CreateWindow(GetTitle().c_str(), 3840, 2160, flags & ~SDL_WINDOW_HIGH_PIXEL_DENSITY);
++#else
+   sdl_window_ = SDL_CreateWindow(GetTitle().c_str(), initial_width, initial_height, flags);
++#endif
+   if (!sdl_window_) {
+     REXLOG_ERROR("SDL_CreateWindow failed: {}", SDL_GetError());
+     return false;
+@@ -170,7 +181,7 @@ bool WindowSDL::OpenImpl() {
+     }
+   }
+ 
+-  if (IsFullscreen()) {
++  if (IsFullscreen() && !REX_PLATFORM_PS5) {
+     // Borderless desktop fullscreen (a NULL display mode is SDL3's default).
+     SDL_SetWindowFullscreen(sdl_window_, true);
+   }
+@@ -292,6 +303,9 @@ uint32_t WindowSDL::GetLatestDpiImpl() const {
+ }
+ 
+ void WindowSDL::ApplyNewFullscreen() {
++#if REX_PLATFORM_PS5
++  return;  // [ps5 port] the window stays the TV picture's size
++#endif
+   if (!sdl_window_) {
+     return;
+   }
+@@ -398,6 +412,12 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
+       SDL_Metal_DestroyView(metal_view);
+     }
+   }
++#elif REX_PLATFORM_PS5
++  // [ps5 port] SDL's window only carries events; the picture goes to the TV
++  // through VK_KHR_display. The presenter sets the real size from the mode.
++  if (allowed_types & Surface::kTypeFlag_Ps5Display) {
++    return std::make_unique<Ps5DisplaySurface>(3840, 2160);
++  }
+ #else
+   SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window_);
+   if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
+diff --git a/src/ui/windowed_app_context_sdl.cpp b/src/ui/windowed_app_context_sdl.cpp
+index dc0b4c2e..45e6d3e4 100644
+--- a/src/ui/windowed_app_context_sdl.cpp
++++ b/src/ui/windowed_app_context_sdl.cpp
+@@ -46,6 +46,13 @@ bool SDLWindowedAppContext::Initialize() {
+   if (requested_driver.empty()) {
+     requested_driver = "cocoa";
+   }
++#endif
++#if REX_PLATFORM_PS5
++  // [ps5 port] SDL has no PS5 video driver: its dummy driver keeps windows and
++  // events working; the picture goes to the TV through VK_KHR_display.
++  if (requested_driver.empty()) {
++    requested_driver = "dummy";
++  }
+ #endif
+   if (!requested_driver.empty()) {
+     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, requested_driver.c_str());
+diff --git a/src/ui/windowed_app_main_sdl.cpp b/src/ui/windowed_app_main_sdl.cpp
+index 77bb1dc2..006bb8f8 100644
+--- a/src/ui/windowed_app_main_sdl.cpp
++++ b/src/ui/windowed_app_main_sdl.cpp
+@@ -67,6 +67,12 @@ int RunWindowedApp(int argc, char** argv) {
+     app->SetParsedArguments(std::move(parsed));
+ 
+     result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
++#if REX_PLATFORM_PS5
++    // [ps5 port] Skip the teardown: guest threads can't be stopped reliably,
++    // and the C runtime's exit handlers then end in a crash report.
++    rex::FlushLogging();
++    std::_Exit(result);
++#endif
+ 
+     app->InvokeOnDestroy();
+   }
+@@ -124,6 +130,138 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
+   return RunWindowedApp(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
+ }
+ 
++#elif REX_PLATFORM_PS5
++
++// [ps5 port] The PS5 entry point (after the GTA IV PS5 port's): work in the
++// app's folder, say on screen when something stops the game, and keep a
++// monitor thread that logs progress counters, so a black screen's log shows
++// which stage stopped moving.
++
++#include <cstdio>
++#include <cstring>
++#include <chrono>
++#include <exception>
++#include <thread>
++#include <typeinfo>
++
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <spdlog/spdlog.h>
++
++#include <rex/chrono/clock.h>
++#include <rex/ps5_diag.h>
++
++extern "C" int sceKernelSendNotificationRequest(int, void*, size_t, int);
++
++REXCVAR_DEFINE_BOOL(ps5_diag_monitor, true, "PS5",
++                    "Log progress counters every 10 s and, when the game stops drawing, where every "
++                    "thread is");
++
++namespace {
++
++void Ps5Notify(const char* text) {
++  struct {
++    char unused[45];
++    char message[3075];
++  } request;
++  std::memset(&request, 0, sizeof(request));
++  std::strncpy(request.message, text, sizeof(request.message) - 1);
++  sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);
++}
++
++// An uncaught C++ exception ends in abort() with its message on stderr, which
++// nobody sees on a PS5: put it in the log and on screen first.
++void Ps5Terminate() {
++  char text[600] = "Uncaught exception";
++  if (auto current = std::current_exception()) {
++    try {
++      std::rethrow_exception(current);
++    } catch (const std::exception& e) {
++      std::snprintf(text, sizeof(text), "Uncaught %s: %s", typeid(e).name(), e.what());
++    } catch (...) {
++    }
++  }
++  REXLOG_ERROR("{}", text);
++  rex::FlushLogging();
++  Ps5Notify(text);
++  sleep(2);  // (let the notification show)
++  std::abort();
++}
++
++void Ps5DiagMonitor() {
++  using namespace rex::ps5diag;
++  uint64_t last_swaps = 0, stuck_ticks = 0, samples = 0;
++  for (int tick = 1;; ++tick) {
++    // A thread crashed: the crash hook ends the game; if it hangs (flushing
++    // the log behind a lock the crashed thread holds), this does.
++    for (int i = 0; i < 100; ++i) {
++      std::this_thread::sleep_for(std::chrono::milliseconds(100));
++      if (const uint64_t crashed = crashed_at_ms.load(std::memory_order_acquire)) {
++        if (NowMs() - crashed > 5000) _exit(1);
++      }
++    }
++    if (crashed_at_ms.load(std::memory_order_acquire) || !REXCVAR_GET(ps5_diag_monitor)) continue;
++    const uint64_t swaps = Get(kSwaps);
++    REXLOG_INFO(
++        "ps5 diag {}s: frames {} ({:.1f}/s), faults {} (mmio {}, watch {}, unhandled {}), vblanks {}, "
++        "interrupts {}, ring writes {}, ring batches {}",
++        tick * 10, swaps, double(swaps - last_swaps) / 10.0, Get(kAccessViolations), Get(kMmioAccesses),
++        Get(kWatchFaults), Get(kUnhandledFaults), Get(kVblanks), Get(kInterrupts), Get(kWritePointer),
++        Get(kPrimaryBuffers));
++    // The game stopped presenting frames for 30 s: where every thread is
++    // (twice at most, 30 s apart, so the log stays readable).
++    stuck_ticks = swaps == last_swaps ? stuck_ticks + 1 : 0;
++    last_swaps = swaps;
++    if ((stuck_ticks == 3 || stuck_ticks == 6) && samples < 4) {
++      ++samples;
++      REXLOG_INFO("ps5 diag: no new frame for {} s; where the threads are:", stuck_ticks * 10);
++      SampleAllThreads();
++      rex::FlushLogging();
++    }
++  }
++}
++
++}  // namespace
++
++int main(int argc, char* argv[]) {
++  chdir("/app0");
++  rex::ps5diag::RegisterThread("main");
++  // A thread that crashed (it would retry its faulting instruction forever,
++  // behind a frozen picture): say so and close the game. It runs in the fault
++  // handler, maybe inside the allocator: no logging, which allocates. The
++  // crash line is already at the end of the log file.
++  rex::ps5diag::crash_hook = [](const char*) {
++    Ps5Notify("Dead Space 2 crashed - the log is in the app's logs folder");
++    spdlog::apply_all([](const std::shared_ptr<spdlog::logger>& l) { l->flush(); });
++    sleep(2);
++    _exit(1);
++  };
++  // The game asked to quit (to the dashboard): close the app.
++  rex::ps5diag::title_exit_hook = [] {
++    REXLOG_INFO("the game asked to quit - closing");
++    spdlog::apply_all([](const std::shared_ptr<spdlog::logger>& l) { l->flush(); });
++    _exit(0);
++  };
++  std::set_terminate(Ps5Terminate);
++  std::thread(Ps5DiagMonitor).detach();
++  // No command line on the PS5 (argv can be empty): flags come from ds2.toml.
++  char program[] = "eboot.bin";
++  char* fallback_argv[] = {program, nullptr};
++  if (argc < 1 || !argv || !argv[0]) {
++    argc = 1;
++    argv = fallback_argv;
++  }
++  const int result = RunWindowedApp(argc, argv);
++  if (result != 0) {
++    Ps5Notify("Dead Space 2 stopped with an error - see the app's logs folder");
++    sleep(2);  // (let the notification show)
++  }
++  // Leave without the C runtime's exit handlers (with the game's threads
++  // still around, they end in a crash report).
++  _exit(result);
++}
++
+ #else
+ 
+ int main(int argc, char* argv[]) {
+diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
+index f102b56a..fe8e9df9 100644
+--- a/thirdparty/CMakeLists.txt
++++ b/thirdparty/CMakeLists.txt
+@@ -301,6 +301,20 @@ if(UNIX AND NOT APPLE)
+     set(SDL_PIPEWIRE_SHARED   ON  CACHE BOOL "" FORCE)
+ endif()
+ 
++if(PS5)
++    # [ps5 port] No desktop windowing, audio or input in SDL on the PS5: its
++    # dummy video driver keeps windows and events working, and the app gets the
++    # display (VK_KHR_display), the DualSense (scePad) and audio (sceAudioOut)
++    # from the PS5 platform layer instead.
++    foreach(_sdl_off SDL_X11 SDL_WAYLAND SDL_KMSDRM SDL_VULKAN SDL_OFFSCREEN SDL_OSS SDL_ALSA
++            SDL_ALSA_SHARED SDL_PULSEAUDIO SDL_PULSEAUDIO_SHARED SDL_PIPEWIRE SDL_PIPEWIRE_SHARED
++            SDL_JACK SDL_SNDIO SDL_HIDAPI SDL_DBUS SDL_IBUS SDL_LIBUDEV SDL_DIALOG)
++        set(${_sdl_off} OFF CACHE BOOL "" FORCE)
++    endforeach()
++    set(SDL_DUMMYVIDEO ON CACHE BOOL "" FORCE)
++    set(SDL_DUMMYAUDIO ON CACHE BOOL "" FORCE)
++endif()
++
+ add_subdirectory(sdl3)
+ 
+ #=============================================================================
+diff --git a/thirdparty/crypto/sha256.cpp b/thirdparty/crypto/sha256.cpp
+index e96b4da1..df468e8a 100644
+--- a/thirdparty/crypto/sha256.cpp
++++ b/thirdparty/crypto/sha256.cpp
+@@ -14,6 +14,11 @@
+ #define __BYTE_ORDER __BYTE_ORDER__
+ #define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
+ #endif
++#elif defined(__PROSPERO__)  // [ps5 port] no <endian.h>
++#if !defined(__BYTE_ORDER) && defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
++#define __BYTE_ORDER __BYTE_ORDER__
++#define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
++#endif
+ #else
+ #include <endian.h>
+ #endif
+diff --git a/thirdparty/renderdoc/renderdoc_app.h b/thirdparty/renderdoc/renderdoc_app.h
+index 7ef9b60f..e999f9fe 100644
+--- a/thirdparty/renderdoc/renderdoc_app.h
++++ b/thirdparty/renderdoc/renderdoc_app.h
+@@ -30,7 +30,7 @@
+ 
+ #if defined(WIN32) || defined(_WIN32)
+ 	#define RENDERDOC_CC __cdecl
+-#elif defined(__linux__) || defined(__NX__)
++#elif defined(__linux__) || defined(__NX__) || defined(__PROSPERO__)  // [ps5 port]
+ 	#define RENDERDOC_CC
+ #else
+ 	#error "Unknown platform"
