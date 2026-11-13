@@ -63,6 +63,14 @@ check_tools() {
              "glslang-tools bison flex gcc g++ pkg-config clang-18 lld-18 python3-mako python3-ply python3-yaml" >&2
         return 1
     fi
+    # The pinned PS5_Mesa needs meson 1.4 or later; Ubuntu 24.04's is 1.3.2.
+    local mv
+    mv=$(meson --version)
+    if ! printf '1.4.0\n%s\n' "$mv" | sort -VC; then
+        echo "meson $mv is too old: the PS5 Vulkan driver (Mesa) needs 1.4 or later" >&2
+        echo "pip install --user 'meson>=1.4' (or pipx install meson), and put it first in PATH" >&2
+        return 1
+    fi
 }
 
 step_toolchain() {
