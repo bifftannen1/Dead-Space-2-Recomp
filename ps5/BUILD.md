@@ -122,15 +122,29 @@ the Xenos GPU emulation):
 
 ## Checks
 
-What can be checked without a console or the PS5 toolchain's own build:
+What can be checked without a console, and without building the PS5 toolchain:
 
 ```
-# every SDK source in the PS5 build, and the app's own, syntax-only for x86_64-sie-ps5
+ps5/tools/fetch_sdk.sh                              # the patched SDK, if not fetched yet
+ps5/tools/ps5_syntax_check.sh <ps5 headers> [jobs]
+PS5_CHECK_OBJ_DIR=<objects> ps5/tools/ps5_syntax_check.sh <ps5 headers> [jobs]
+ps5/tools/ps5_symbol_check.sh <objects> <PS5_PayloadSDK source tree>
 ```
 
-All 243 SDK sources and the 3 app sources pass with clang 18, the payload SDK's headers and
-libc++ 18 headers. That proves the code parses and type-checks for the PS5; it does not
-prove it links or runs.
+`<ps5 headers>` is an installed PS5 payload SDK, or just its headers copied together (the
+top of the script shows how).
+
+- The first compiles, syntax-only for `x86_64-sie-ps5`, every source the PS5 build takes
+  from the SDK plus the app's own: 246 files, and all pass with clang 18 and libc++ 18
+  headers.
+- With `PS5_CHECK_OBJ_DIR` it compiles them to PS5 object files instead, which also runs
+  the assembler and catches code that needs CPU features the PS5 lacks. All pass.
+- The symbol check reads those objects as the linker would: nothing is defined twice,
+  every SDK and app symbol that is used is defined, and all 185 C library functions they
+  call are in the payload SDK's lists of what the console exports.
+
+That shows the code compiles for the PS5 and that its own parts fit together. It is not a
+link: the port has not been linked with the PS5 toolchain or run on a console yet.
 
 ## Licence
 

@@ -19,6 +19,10 @@
 # This shows the code parses and type-checks for x86_64-sie-ps5. It doesn't
 # compile the 157 recompiled units (the PC build already does, from the same
 # files), and it says nothing about linking or running.
+#
+# PS5_CHECK_OBJ_DIR=<dir> compiles to PS5 object files in <dir> instead (-O0):
+# slower, but it also runs the assembler and catches code that needs CPU
+# features the PS5 doesn't have.
 set -uo pipefail
 
 headers=$(realpath "${1:?directory with target/include (see the top of this script)}")
@@ -48,7 +52,7 @@ t=$sdk/thirdparty
 flags=(--target=x86_64-sie-ps5 -march=znver2 -femulated-tls -fno-stack-protector -fno-plt
     -fdenormal-fp-math=ieee -fvisibility-nodllstorageclass=default
     -isysroot "$headers" -isystem "$headers/target/include"
-    -fsyntax-only -fno-strict-aliasing -Wno-everything -ferror-limit=8
+    -fno-strict-aliasing -Wno-everything -ferror-limit=8
     -DREX_PLATFORM_LINUX=1 -DREX_PLATFORM_PS5=1 -DREX_HAS_VULKAN=1 '-DREXGLUE_BUILD_CONFIG="Release"'
     -DNDEBUG -DSPDLOG_FMT_EXTERNAL -DSPDLOG_COMPILED_LIB -DFMT_USE_CONSTEVAL=0 -DVK_NO_PROTOTYPES
     -DDS2_TARGET_TU2=1 '-DDS2_PS5_VERSION="check"'
@@ -86,17 +90,22 @@ list=$work/files
              input/ps5/ps5_input_driver input/sdl/sdl_input_driver audio/ps5/ps5_audio_driver; do
         echo "$sdk/src/$f.cpp"
     done
-    echo "$t/crypto/sha256.cpp"
     for f in main ds2_ps5_install ds2_ps5_disc_swap; do echo "$repo/ps5/src/$f.cpp"; done
 } | awk '!seen[$0]++' > "$list"
 
+objdir=${PS5_CHECK_OBJ_DIR:-}
+[[ -z $objdir ]] || { mkdir -p "$objdir" && objdir=$(realpath "$objdir"); }
+
 check() {
-    local f=$1 out
+    local f=$1 n=$2 out mode=(-fsyntax-only)
     [[ -f $f ]] || { echo "MISSING $f"; return 1; }
+    if [[ -n $objdir ]]; then
+        mode=(-c -O0 -o "$objdir/$(printf '%03d' "$n")_$(basename "${f%.*}").o")
+    fi
     if [[ $f == *.c ]]; then
-        out=$("$cc" "${flags[@]}" "$f" 2>&1)
+        out=$("$cc" "${flags[@]}" "${mode[@]}" "$f" 2>&1)
     else
-        out=$("$cxx" "${cxxflags[@]}" "${flags[@]}" "$f" 2>&1)
+        out=$("$cxx" "${cxxflags[@]}" "${flags[@]}" "${mode[@]}" "$f" 2>&1)
     fi
     if [[ -n $out ]]; then
         echo "FAIL $f"
@@ -110,7 +119,7 @@ total=$(wc -l < "$list")
 echo "==> $total sources, $jobs at a time ($cxx, libc++ headers $libcxx)"
 pids=() fail=0 n=0
 while IFS= read -r f; do
-    check "$f" > "$work/out.$n" 2>&1 &
+    check "$f" "$n" > "$work/out.$n" 2>&1 &
     pids+=($!)
     n=$((n + 1))
     if (( ${#pids[@]} >= jobs )); then

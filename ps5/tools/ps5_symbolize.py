@@ -38,6 +38,21 @@ def anchor_address(elf: str) -> int:
     sys.exit(f"{ANCHOR} is not in {elf}: is it the llvm-pie.elf of the build that wrote the log?")
 
 
+def relative_addresses(line: str) -> list[int]:
+    """The program-relative code addresses in a crash or stack line, in the order printed."""
+    if "[ps5 crash]" in line:
+        # "... (rip <absolute>, anchor-relative <relative>) | stack: <relative> <relative> ..."
+        head, _, stack = line[line.index("[ps5 crash]"):].partition("| stack:")
+        found = re.findall(r"anchor-relative ([0-9A-F]+)", head) + re.findall(r"\b[0-9A-F]+\b", stack)
+    else:
+        # "ps5 stack: tid <n> <name>: rip <relative> | <relative> <relative> ..."
+        head, _, stack = line[line.index("ps5 stack:"):].partition("|")
+        found = re.findall(r"rip ([0-9A-F]+)", head) + re.findall(r"\b[0-9A-F]+\b", stack)
+    values = [int(v, 16) for v in found]
+    # (the program is under 256 MB either side of the anchor)
+    return [v for v in values if 0 < v < 2 * BIAS]
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__)
@@ -50,11 +65,9 @@ def main() -> int:
         if "[ps5 crash]" not in line and "ps5 stack:" not in line:
             continue
         print(line)
-        if "anchor " in line and "ps5 stack: anchor" in line:
+        if "ps5 stack: anchor" in line:
             continue
-        # the relative addresses: after "anchor-relative", after "rip", and the list after "|"
-        values = [int(v, 16) for v in re.findall(r"(?:anchor-relative |rip |[| ])([0-9A-F]{7,9})\b", line)]
-        values = [v for v in values if BIAS // 2 <= v < BIAS * 2]
+        values = relative_addresses(line)
         if not values:
             continue
         addresses = [hex(v - BIAS + anchor) for v in values]

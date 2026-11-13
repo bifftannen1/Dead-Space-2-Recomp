@@ -74,12 +74,12 @@ add_executable(ds2
     "${DS2_PS5_DIR}/src/main.cpp"
     "${DS2_PS5_DIR}/src/ds2_ps5_install.cpp"
     "${DS2_PS5_DIR}/src/ds2_ps5_disc_swap.cpp"
-    # SHA-256 for checking the player's files against the ones the code was made from
-    "${REXSDK_DIR}/thirdparty/crypto/sha256.cpp"
 )
 target_include_directories(ds2 PRIVATE
     "${DS2_GEN}" "${DS2_SRC}/app" "${DS2_PS5_DIR}/src"
-    "${REXSDK_DIR}/thirdparty"        # crypto/sha256.h
+    # crypto/sha256.h: checking the player's files against the ones the code was
+    # made from. The code itself is already in the runtime (xboxkrnl_crypt.cpp).
+    "${REXSDK_DIR}/thirdparty"
     "${REXSDK_DIR}/thirdparty/imgui"
 )
 target_compile_definitions(ds2 PRIVATE DS2_TARGET_TU2=1 DS2_PS5_VERSION="${DS2_PS5_VERSION}")

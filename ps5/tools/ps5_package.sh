@@ -51,12 +51,18 @@ done
 # word. PS5_WHOLE_ARCHIVE=0 links them as plain archives.
 whole=${PS5_WHOLE_ARCHIVE:-1}
 inputs=()
+declare -A seen=()
 for w in "${words[@]}"; do
     case $w in
         */libz.a) continue ;;  # (RADV's archive has zlib in it)
         *.o|*.a) [[ $w = /* ]] || w=$build/$w ;;
         *) continue ;;
     esac
+    # CMake names a static library again after the ones that depend on it. The
+    # link below is one group, so once is enough, and a library taken whole
+    # twice would define everything in it twice.
+    [[ -z ${seen[$w]:-} ]] || continue
+    seen[$w]=1
     case $w in
         */librexruntime.a|*/librexgpu-xenos.a)
             if [[ $whole == 1 ]]; then inputs+=(--whole-archive "$w" --no-whole-archive); else inputs+=("$w"); fi ;;
