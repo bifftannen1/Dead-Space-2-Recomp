@@ -1,0 +1,29 @@
+# Dead Space 2 for PS5 - settings.
+#
+# Copy this file to ds2.toml (next to it, in the app's folder) and remove the
+# "#" in front of a line to change that setting. Without a ds2.toml the app
+# uses the values shown here. A line the app doesn't understand is ignored.
+
+# The game's language: "auto" follows the PS5's. The World (En,Fr,Es) discs
+# have English and French voices, and Spanish text with English voices.
+#ps5_language = "auto"          # auto, english, french, spanish
+
+# The TV mode the picture is sent in: 2160 (4K) or 1080. The game itself is
+# drawn at the Xbox 360's 1280x720 and scaled up to it.
+#ps5_display_height = 2160
+
+# Draw the game at 2 or 3 times the Xbox 360's resolution (2 = 2560x1440,
+# 3 = 3840x2160). Untested on the PS5: it costs graphics memory and speed, and
+# some effects may look different. 1 is the console's own.
+#resolution_scale = 1
+
+# Sound queued ahead of the speakers, in 5.3 ms frames (4 to 64). Fewer is
+# less delay between picture and sound, but may crackle.
+#audio_maxqframes = 8
+
+# The log (in the app's logs folder): info, debug or trace say more.
+#log_level = "info"
+
+# Every 10 s, a line of progress counters in the log, and where every thread
+# is when the game stops drawing. Leave on while the port is young.
+#ps5_diag_monitor = true

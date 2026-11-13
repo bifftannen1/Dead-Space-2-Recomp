@@ -17,6 +17,30 @@ It has two goals:
 
 Mods are supported through a hook API keyed by those PDB names.
 
+## PlayStation 5 (work in progress)
+The same recompiled game, built as a native homebrew app for a jailbroken PS5, in the way the
+[GTA IV PS5 port](https://github.com/elripalda/gta4-ps5) does it: the PS5 payload SDK, mihawk-99's
+PS5 Vulkan driver, one static program in `/data/homebrew/`.
+
+> **Not run on a console yet.** The PS5 layer is written and every source file passes a compile
+> check for the PS5 target, but it has not been built with the PS5 toolchain, linked, or started on
+> a PS5. Treat it as a first build to test and fix, not as a release. No game data is included.
+
+- **What it is:** [`sdk/rexglue_ps5.patch`](sdk/rexglue_ps5.patch) adds a PS5 platform to the pinned
+  ReXGlue SDK (guest memory in direct memory, disc images read without mapping, the PS5's signal
+  and thread quirks, DualSense input, audio, presentation to the TV, the Xenos GPU backend linked
+  in); [`ps5/`](ps5) has the app, the build and the packaging.
+- **What you put on the PS5:** your own Disc 1 image (and Disc 2), Title Update #2 and optionally
+  Severed, in the app's `install` folder. The app checks them and prepares the game at start-up;
+  no PC step is needed. [`ps5/package/install/README.txt`](ps5/package/install/README.txt) has the
+  details.
+- **Controls:** Cross/Circle/Square/Triangle are A/B/X/Y, L1/R1 the bumpers, L2/R2 the triggers,
+  Options is START, the touchpad click is BACK. Rumble goes to the DualSense.
+- **The picture:** the game is drawn at the Xbox 360's 1280x720 and scaled to the TV's 4K or 1080p
+  mode, at the game's own 30 FPS. `resolution_scale` in `ds2.toml` raises the internal resolution
+  (untested on the PS5).
+- **Build and logs:** [ps5/BUILD.md](ps5/BUILD.md).
+
 ## Status
 TU2 is now the only supported build; the tooling remains in `tools/`.
 The campaign and Severed DLC have not been fully playtested.
@@ -59,6 +83,7 @@ Build from source: [docs/BUILDING.md](docs/BUILDING.md). No game data, title upd
 | `src/app/` | Host app (`ds2.exe`) |
 | `src/modapi/`, `mods/` | Mod API and example mods |
 | `sdk/` | Pinned ReXGlue commit and the DS2 patch |
+| `ps5/`, `sdk/rexglue_ps5.patch` | The PS5 port: app, build, packaging and the SDK's PS5 platform layer ([ps5/BUILD.md](ps5/BUILD.md)) |
 | `tools/` | Build, XEX extraction, smoke test, object comparison, mod generators, `pdbchain` (PDB matching, including `V0_PREV_BUILD` for carrying names to a new build), `tu2/` (build-to-build tooling) |
 
 ## Docs
@@ -71,4 +96,6 @@ Build from source: [docs/BUILDING.md](docs/BUILDING.md). No game data, title upd
 
 ## Credits
 - **[ReXGlue](https://github.com/rexglue/rexglue-sdk)** and its developers: the Xbox 360 static recompilation toolkit and runtime this project is built on.
+- **[elripalda](https://github.com/elripalda)**: the [GTA IV PS5 port](https://github.com/elripalda/gta4-ps5), whose PS5 platform work for ReXGlue the PS5 layer here is carried over from (GPL-3.0).
+- **[mihawk-99](https://github.com/mihawk-99)** ([PS5_Mesa](https://github.com/mihawk-99/PS5_Mesa), the PS5 Vulkan driver, and the PS5 payload SDK fork), **[Nazky](https://github.com/Nazky)** ([ps5-plume-triangle](https://github.com/Nazky/ps5-plume-triangle), the PS5 Vulkan app setup) and **[ps5-payload-dev](https://github.com/ps5-payload-dev)** (the PS5 payload SDK): what the PS5 build is made with.
 - **[Xenia](https://github.com/xenia-project/xenia)** and its developers ([xenia.jp](https://xenia.jp)): the Xbox 360 emulator whose kernel, GPU (Xenos) and file-system work ReXGlue's runtime builds on.

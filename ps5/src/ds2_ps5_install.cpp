@@ -24,7 +24,8 @@
 #include <rex/system/util/xex2_info.h>
 #include <rex/system/xcontent.h>
 
-#include "sha256.h"
+// (by its folder: FreeBSD, and so the PS5 SDK, has a <sha256.h> of its own)
+#include "crypto/sha256.h"
 
 namespace ds2ps5 {
 
@@ -290,8 +291,8 @@ GameFiles PrepareGameFiles(const fs::path& app_root, const fs::path& content_roo
     } else if (HasMagic(path, "LIVE", "PIRS", "CON ")) {
       auto header = rex::filesystem::StfsContainerDevice::ReadPackageHeader(path);
       if (!header || header->metadata.execution_info.title_id != kTitleId) continue;
-      const uint32_t type = uint32_t(rex::XContentType(header->metadata.content_type));
-      if (type == uint32_t(rex::XContentType::kInstaller)) {
+      const uint32_t type = uint32_t(rex::system::XContentType(header->metadata.content_type));
+      if (type == uint32_t(rex::system::XContentType::kInstaller)) {
         rex::filesystem::StfsContainerDevice update("\\Device\\Ds2Ps5Update", path);
         if (!update.Initialize()) {
           result.notes.push_back(path.filename().string() + ": the title update can't be read");
@@ -308,7 +309,7 @@ GameFiles PrepareGameFiles(const fs::path& app_root, const fs::path& content_roo
                                            patch[0].empty() && patch[1].empty()
                                                ? " (not Title Update #2 for these discs)"
                                                : ""));
-      } else if (type == uint32_t(rex::XContentType::kMarketplaceContent)) {
+      } else if (type == uint32_t(rex::system::XContentType::kMarketplaceContent)) {
         dlc_packages.push_back(path);
         dlc_types.push_back(type);
       }
