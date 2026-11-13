@@ -4504,10 +4504,22 @@ index 77bb1dc2..006bb8f8 100644
  
  int main(int argc, char* argv[]) {
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
-index f102b56a..fe8e9df9 100644
+index f102b56a..dd2a6d40 100644
 --- a/thirdparty/CMakeLists.txt
 +++ b/thirdparty/CMakeLists.txt
-@@ -301,6 +301,20 @@ if(UNIX AND NOT APPLE)
+@@ -177,6 +177,11 @@ set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+ set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+ set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+ set(SPDLOG_INSTALL ON CACHE BOOL "" FORCE)
++if(PS5)
++    # [ps5 port] The PS5 headers declare fwrite_unlocked and its libc doesn't
++    # have it: plain fwrite, whatever spdlog's configure check concludes.
++    set(SPDLOG_FWRITE_UNLOCKED OFF CACHE BOOL "" FORCE)
++endif()
+ add_subdirectory(spdlog)
+ target_compile_options(spdlog PRIVATE -w)
+ 
+@@ -301,6 +306,20 @@ if(UNIX AND NOT APPLE)
      set(SDL_PIPEWIRE_SHARED   ON  CACHE BOOL "" FORCE)
  endif()
  

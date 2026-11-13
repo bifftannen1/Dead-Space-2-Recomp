@@ -143,7 +143,16 @@ top of the script shows how).
   every SDK and app symbol that is used is defined, and all 185 C library functions they
   call are in the payload SDK's lists of what the console exports.
 
-That shows the code compiles for the PS5 and that its own parts fit together. It is not a
+The whole build has also been compiled once with a stand-in for the toolchain: the
+system's clang 18 aimed at `x86_64-sie-ps5`, the payload SDK's headers, the same CMake
+files, and no linker. All 852 steps finish: SDL, FFmpeg, glslang, the runtime, the GPU
+backend and the 159 recompiled sources, as PS5 object code. Across the 181 objects and
+libraries that go into the link, nothing is defined twice, and nothing that the runtime,
+the libraries or the game refer to is missing. What remains unresolved is the C++ library
+and the console's own libraries, plus a few functions SDL only uses when a configure
+check finds them (a check that needs the real linker).
+
+That shows the code compiles for the PS5 and that its parts fit together. It is not a
 link: the port has not been linked with the PS5 toolchain or run on a console yet.
 
 ## Licence

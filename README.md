@@ -22,9 +22,10 @@ The same recompiled game, built as a native homebrew app for a jailbroken PS5, i
 [GTA IV PS5 port](https://github.com/elripalda/gta4-ps5) does it: the PS5 payload SDK, mihawk-99's
 PS5 Vulkan driver, one static program in `/data/homebrew/`.
 
-> **Not run on a console yet.** The PS5 layer is written and every source file passes a compile
-> check for the PS5 target, but it has not been built with the PS5 toolchain, linked, or started on
-> a PS5. Treat it as a first build to test and fix, not as a release. No game data is included.
+> **Not run on a console yet.** The PS5 layer is written, and the whole build (libraries, runtime
+> and the recompiled game) compiles to PS5 object code with a stand-in compiler setup, but it has
+> not been built with the PS5 toolchain, linked, or started on a PS5. Treat it as a first build to
+> test and fix, not as a release. No game data is included.
 
 - **What it is:** [`sdk/rexglue_ps5.patch`](sdk/rexglue_ps5.patch) adds a PS5 platform to the pinned
   ReXGlue SDK (guest memory in direct memory, disc images read without mapping, the PS5's signal
