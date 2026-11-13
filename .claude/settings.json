@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(ps5/tools/build_ps5.sh)",
+      "Bash(ps5/tools/build_ps5.sh *)",
+      "Bash(./ps5/tools/build_ps5.sh)",
+      "Bash(./ps5/tools/build_ps5.sh *)"
+    ]
+  }
+}

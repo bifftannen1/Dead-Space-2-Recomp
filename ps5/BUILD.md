@@ -50,6 +50,22 @@ PS5.
 The recompiled game is 157 large files; the first build takes a long time and several GB of
 memory per compiler job (`ninja -j4` if the machine runs out).
 
+### All of it in one command
+
+```
+ps5/tools/build_ps5.sh                       # toolchain, sdk, compile, package, zip
+ps5/tools/build_ps5.sh compile package zip   # or only some steps, e.g. after a fix
+```
+
+It clones ps5-plume-triangle at a pinned commit into `thirdparty/`, builds it, then runs the
+steps above and leaves `out/ps5/DeadSpace2-PS5-<version>.zip`. Each step's output is in
+`out/ps5/logs/<step>.log`.
+
+In a Claude Code cloud session the toolchain's build scripts are refused as code from
+outside the repository. `.claude/settings.json` allows this one command, so that a session
+can build and package the port. The file is only read by a session that has this
+repository alone, started from a branch that contains it.
+
 | Option | Effect |
 |---|---|
 | `-DDS2_PS5_THINLTO=ON` | ThinLTO across the whole program (slower link, faster game code). Off by default. |
